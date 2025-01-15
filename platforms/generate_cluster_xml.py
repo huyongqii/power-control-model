@@ -38,7 +38,7 @@ class ClusterXMLGenerator:
         # master节点功耗属性
         master_wattage = ET.SubElement(master, 'prop')
         master_wattage.set('id', 'wattage_per_state')
-        master_wattage.set('value', '100:200')
+        master_wattage.set('value', '250.0:800.0')
         
         master_wattage_off = ET.SubElement(master, 'prop')
         master_wattage_off.set('id', 'wattage_off')
@@ -60,7 +60,7 @@ class ClusterXMLGenerator:
             # 定义主机在不同电源状态下的功耗，格式为 state1:state2:...，单位通常为瓦特（W）。
             node_wattage = ET.SubElement(node, 'prop')
             node_wattage.set('id', 'wattage_per_state')
-            node_wattage.set('value', '100:200')
+            node_wattage.set('value', '250:800')
             
             # 定义主机在关机状态下的功耗，单位通常为瓦特（W）。
             node_wattage_off = ET.SubElement(node, 'prop')
@@ -83,7 +83,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate Batsim cluster platform XML')
     parser.add_argument('--nodes', type=int, default=NUM_NODES,
                       help='Number of compute nodes')
-    parser.add_argument('--output', type=str, default='cluster.xml',
+    parser.add_argument('--output', type=str, default='data/cluster.xml',
                       help='Output XML file path')
     
     args = parser.parse_args()

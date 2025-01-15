@@ -5,6 +5,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
 import sys
 import matplotlib.pyplot as plt
+from sklearn.model_selection import KFold
 
 # 添加父目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,7 +33,7 @@ MODEL_CONFIG = {
     'weight_decay': 1e-5,
     'early_stopping_patience': 10,
     'model_path': os.path.join(MODEL_DIR, 'node_predictor.pth'),
-    'data_path': os.path.join(DATA_DIR, 'training_data_20250114_230726.csv'),
+    'data_path': os.path.join(DATA_DIR, 'training_data_20250115_191728.csv'),
     'log_path': os.path.join(LOG_DIR, 'training.log')
 }
 
@@ -77,93 +78,77 @@ class NodePredictor:
         # 初始化数据处理器
         self.data_processor = DataProcessor(self.config)
         
-    def train(self, X_train: np.ndarray, y_train: np.ndarray):
-        """训练预测模型"""
+    def train(self, data_dict: dict):
+        """训练模型，使用交叉验证来选择最佳模型"""
         print(f"Training on device: {self.device}")
         
+        X_train = data_dict['X_train']
+        y_train = data_dict['y_train']
+        X_val = data_dict['X_val']
+        y_val = data_dict['y_val']
+        
         # 转换为PyTorch张量
-        X_train = torch.FloatTensor(X_train).to(self.device)
-        y_train = torch.FloatTensor(y_train).reshape(-1, 1).to(self.device)
-        
-        # 创建模型
-        self.model = NodePredictorNN(X_train.shape[1]).to(self.device)
-        
-        # 使用MSE损失
-        criterion = nn.MSELoss()
-        
-        # 使用Adam优化器，较小的学习率
-        optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=0.001,
-            weight_decay=1e-4
-        )
+        X_val_tensor = torch.FloatTensor(X_val).to(self.device)
+        y_val_tensor = torch.FloatTensor(y_val).to(self.device)
         
         epochs = self.config['epochs']
         batch_size = self.config['batch_size']
-        best_loss = float('inf')
+        
+        # 创建模型
+        self.model = NodePredictorNN(X_train.shape[1]).to(self.device)
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=self.config['learning_rate'],
+            weight_decay=self.config['weight_decay']
+        )
+        
+        best_val_loss = float('inf')
         patience_counter = 0
+        best_model_state = None
         
         for epoch in range(epochs):
-            self.model.train()
-            total_loss = 0
-            batch_count = 0
+            # 训练一个epoch
+            train_loss = self.train_one_epoch(
+                torch.FloatTensor(X_train).to(self.device),
+                torch.FloatTensor(y_train).to(self.device),
+                criterion, optimizer, batch_size
+            )
             
-            # 打乱数据
-            indices = torch.randperm(len(X_train))
-            X_train = X_train[indices]
-            y_train = y_train[indices]
+            # 在验证集上评估
+            val_loss = self.validate(X_val_tensor, y_val_tensor, criterion)
             
-            for i in range(0, len(X_train), batch_size):
-                batch_X = X_train[i:i+batch_size]
-                batch_y = y_train[i:i+batch_size]
-                
-                optimizer.zero_grad()
-                outputs = self.model(batch_X)
-                loss = criterion(outputs, batch_y)
-                
-                # 检查损失值是否有效
-                if not torch.isnan(loss) and not torch.isinf(loss):
-                    loss.backward()
-                    # 梯度裁剪
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    optimizer.step()
-                    
-                    total_loss += loss.item()
-                    batch_count += 1
-                else:
-                    print(f"Warning: Invalid loss value detected: {loss.item()}")
-                    continue
+            if (epoch + 1) % 10 == 0:
+                print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
             
-            if batch_count > 0:
-                avg_loss = total_loss / batch_count
-                if (epoch + 1) % 10 == 0:
-                    print(f'Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}')
-                
-                # 早停
-                if avg_loss < best_loss:
-                    best_loss = avg_loss
-                    patience_counter = 0
-                    # 保存最佳模型
-                    torch.save(self.model.state_dict(), self.config['model_path'])
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.config['early_stopping_patience']:
-                        print("Early stopping triggered")
-                        break
-    
-    def evaluate(self, X_test: np.ndarray, y_test: np.ndarray) -> tuple:
+            # 早停检查
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                best_model_state = self.model.state_dict()
+            else:
+                patience_counter += 1
+                if patience_counter >= self.config['early_stopping_patience']:
+                    print(f"Early stopping at epoch {epoch+1}")
+                    break
+        
+        # 使用最佳模型状态
+        self.model.load_state_dict(best_model_state)
+        torch.save(best_model_state, self.config['model_path'])
+        print(f"\nBest validation loss: {best_val_loss:.4f}")
+
+    def evaluate(self, data_dict: dict) -> tuple:
         """评估模型性能"""
         self.model.eval()
-        X_test = torch.FloatTensor(X_test).to(self.device)
+        X_test = torch.FloatTensor(data_dict['X_test']).to(self.device)
+        y_test = data_dict['y_test']
         
         with torch.no_grad():
             predictions = self.model(X_test).cpu().numpy()
         
-        # 将预测值和真实值转换回原始尺度
+        # 转换回原始尺度
         predictions = self.data_processor.inverse_transform_y(predictions)
-        print(predictions)
         y_test = self.data_processor.inverse_transform_y(y_test)
-        print(y_test)
         
         # 确保预测值为非负整数
         predictions = np.maximum(0, np.round(predictions)).astype(int).reshape(-1)
@@ -188,7 +173,7 @@ class NodePredictor:
             'within_5_nodes': np.mean(abs_errors <= 5) * 100
         }
         
-        # 计算准确率（在容差范围内的预测比例）
+        # 计算准确率
         tolerance = self.config.get('accuracy_tolerance', 2)
         accuracy = np.mean(abs_errors <= tolerance) * 100
         
@@ -201,7 +186,7 @@ class NodePredictor:
         }
         
         return metrics, predictions, y_test
-        
+
     def predict(self, X: np.ndarray) -> np.ndarray:
         """预测计算节点数"""
         self.model.eval()
@@ -222,37 +207,128 @@ class NodePredictor:
         path = path or self.config['model_path']
         self.model.load_state_dict(torch.load(path))
 
+    def evaluate_with_cv(self, data_dict: dict) -> dict:
+        """使用交叉验证进行模型评估"""
+        X_train = data_dict['X_train']
+        y_train = data_dict['y_train']
+        n_splits = self.config.get('n_splits', 5)
+        
+        # 存储所有折的评估结果
+        cv_metrics = {
+            'mse': [], 'mae': [], 'r2': [], 'accuracy': [],
+            'within_1_node': [], 'within_2_nodes': [], 'within_5_nodes': []
+        }
+        
+        # 交叉验证
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        for fold, (train_idx, val_idx) in enumerate(kf.split(X_train)):
+            # 获取当前折的数据
+            X_val_fold = X_train[val_idx]
+            y_val_fold = y_train[val_idx]
+            
+            # 在当前折上评估
+            X_val_tensor = torch.FloatTensor(X_val_fold).to(self.device)
+            with torch.no_grad():
+                predictions = self.model(X_val_tensor).cpu().numpy()
+            
+            # 转换回原始尺度
+            predictions = self.data_processor.inverse_transform_y(predictions)
+            y_val_true = self.data_processor.inverse_transform_y(y_val_fold)
+            
+            # 确保预测值为非负整数
+            predictions = np.maximum(0, np.round(predictions)).astype(int).reshape(-1)
+            y_val_true = y_val_true.reshape(-1)
+            
+            # 计算当前折的指标
+            mse = mean_squared_error(y_val_true, predictions)
+            mae = mean_absolute_error(y_val_true, predictions)
+            r2 = r2_score(y_val_true, predictions)
+            
+            # 计算准确率
+            abs_errors = np.abs(predictions - y_val_true)
+            cv_metrics['mse'].append(mse)
+            cv_metrics['mae'].append(mae)
+            cv_metrics['r2'].append(r2)
+            cv_metrics['within_1_node'].append(np.mean(abs_errors <= 1) * 100)
+            cv_metrics['within_2_nodes'].append(np.mean(abs_errors <= 2) * 100)
+            cv_metrics['within_5_nodes'].append(np.mean(abs_errors <= 5) * 100)
+        
+        # 计算平均指标和标准差
+        final_metrics = {}
+        for metric in cv_metrics:
+            values = cv_metrics[metric]
+            final_metrics[metric] = {
+                'mean': np.mean(values),
+                'std': np.std(values)
+            }
+        
+        return final_metrics
+
+    def train_one_epoch(self, X_train, y_train, criterion, optimizer, batch_size):
+        """训练一个epoch"""
+        self.model.train()
+        total_loss = 0
+        batch_count = 0
+        
+        # 打乱数据
+        indices = torch.randperm(len(X_train))
+        X_train = X_train[indices]
+        y_train = y_train[indices]
+        
+        for i in range(0, len(X_train), batch_size):
+            batch_X = X_train[i:i+batch_size]
+            batch_y = y_train[i:i+batch_size]
+            
+            optimizer.zero_grad()
+            outputs = self.model(batch_X)
+            loss = criterion(outputs, batch_y)
+            
+            if not torch.isnan(loss) and not torch.isinf(loss):
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                optimizer.step()
+                
+                total_loss += loss.item()
+                batch_count += 1
+                
+        return total_loss / batch_count if batch_count > 0 else float('inf')
+    
+    def validate(self, X_val, y_val, criterion):
+        """验证模型性能"""
+        self.model.eval()
+        with torch.no_grad():
+            outputs = self.model(X_val)
+            val_loss = criterion(outputs, y_val)
+        return val_loss.item()
+
 def main():
     """测试模型训练和评估"""
-    # 加载和准备数据
     predictor = NodePredictor(MODEL_CONFIG)
-    X_train, X_test, y_train, y_test = predictor.data_processor.load_and_prepare_data(
-        MODEL_CONFIG['data_path']
-    )
+    
+    # 加载和准备数据
+    data_dict = predictor.data_processor.load_and_prepare_data(MODEL_CONFIG['data_path'])
     
     # 打印数据形状
     print("\nData shapes:")
-    print(f"X_train: {X_train.shape}")
-    print(f"X_test: {X_test.shape}")
-    print(f"y_train: {y_train.shape}")
-    print(f"y_test: {y_test.shape}")
+    for key, value in data_dict.items():
+        if isinstance(value, np.ndarray):
+            print(f"{key}: {value.shape}")
     
     # 训练模型
-    predictor.train(X_train, y_train)
+    predictor.train(data_dict)
     
-    # 评估模型
-    metrics, predictions, y_test = predictor.evaluate(X_test, y_test)
+    # 在测试集上进行最终评估
+    test_metrics, predictions, y_test = predictor.evaluate(data_dict)
     
-    # 打印详细评估结果
-    print("\n=== Model Evaluation Results ===")
-    print(f"\nBasic Metrics:")
-    print(f"Mean Squared Error: {metrics['mse']:.2f}")
-    print(f"Mean Absolute Error: {metrics['mae']:.2f}")
-    print(f"R² Score: {metrics['r2']:.2f}")
-    print(f"Accuracy (±{MODEL_CONFIG.get('accuracy_tolerance', 2)} nodes): {metrics['accuracy']:.2f}%")
+    # 打印测试集结果
+    print("\n=== Test Set Results ===")
+    print(f"Mean Squared Error: {test_metrics['mse']:.2f}")
+    print(f"Mean Absolute Error: {test_metrics['mae']:.2f}")
+    print(f"R² Score: {test_metrics['r2']:.2f}")
+    print(f"Accuracy (±{MODEL_CONFIG.get('accuracy_tolerance', 2)} nodes): {test_metrics['accuracy']:.2f}%")
     
+    dist = test_metrics['error_distribution']
     print("\nError Distribution:")
-    dist = metrics['error_distribution']
     print(f"Mean Error: {dist['mean_error']:.2f} nodes")
     print(f"Median Error: {dist['median_error']:.2f} nodes")
     print(f"Max Error: {dist['max_error']:.2f} nodes")

@@ -27,18 +27,19 @@ class WorkloadGenerator:
             # 计算提交作业的概率
             submit_prob = self._get_submit_probability(current_date)
             
-            # 根据概率决定是否提交作业
-            if random.random() < submit_prob:
-                # 直接传入current_time而不是current_date
+            # 可能在同一时间点提交多个作业
+            num_jobs = self._get_num_jobs(submit_prob)
+            
+            for _ in range(num_jobs):
                 job = self._generate_job(job_id, current_time)
                 jobs.append(job)
                 job_id += 1
             
-            # 时间前进（随机间隔，但工作时间间隔较短）
+            # 缩短时间间隔
             if self._is_working_hours(current_date):
-                current_time += random.randint(60, 300)  # 1-5分钟
+                current_time += random.randint(30, 180)  # 30秒到3分钟
             else:
-                current_time += random.randint(300, 900)  # 5-15分钟
+                current_time += random.randint(180, 600)  # 3分钟到10分钟
         
         # 保存为batsim工作负载格式
         workload = {
@@ -54,37 +55,46 @@ class WorkloadGenerator:
         
     def _get_submit_probability(self, current_date: datetime) -> float:
         """获取特定时间点提交作业的概率"""
-        base_prob = 0.6  # 基础概率
+        base_prob = 0.8  # 提高基础概率
         
-        # 节假日降低概率
+        # 节假日降低概率但不要太低
         if current_date.date() in self.cn_holidays:
-            base_prob *= 0.3
-        # 周末降低概率
+            base_prob *= 0.5
+        # 周末降低概率但不要太低
         elif current_date.weekday() >= 5:  # 5=周六，6=周日
-            base_prob *= 0.4
+            base_prob *= 0.6
             
         # 根据小时调整概率
         hour = current_date.hour
         if 0 <= hour < 6:  # 凌晨
-            base_prob *= 0.2
+            base_prob *= 0.4
         elif 6 <= hour < 9:  # 早晨
-            base_prob *= 0.7
+            base_prob *= 0.8
         elif 9 <= hour < 17:  # 工作时间
             base_prob *= 1.0
         elif 17 <= hour < 20:  # 傍晚
-            base_prob *= 0.8
+            base_prob *= 0.9
         else:  # 晚上
-            base_prob *= 0.4
+            base_prob *= 0.6
             
         return base_prob
-        
+    
+    def _get_num_jobs(self, prob: float) -> int:
+        """根据概率决定在当前时间点提交的作业数量"""
+        if random.random() > prob:
+            return 0
+            
+        # 在工作时间可能同时提交多个作业
+        weights = [0.5, 0.3, 0.15, 0.05]  # 权重分别对应提交1,2,3,4个作业的概率
+        return random.choices(range(1, 5), weights=weights)[0]
+    
     def _is_working_hours(self, current_date: datetime) -> bool:
-        """判断是否为工作时间"""
+        """判断是否为工作时间（扩大工作时间范围）"""
         if current_date.weekday() >= 5:  # 周末
-            return False
+            return 9 <= current_date.hour < 18  # 周末工作时间短一些
         if current_date.date() in self.cn_holidays:  # 节假日
-            return False
-        return 9 <= current_date.hour < 17  # 工作时间
+            return 9 <= current_date.hour < 18
+        return 7 <= current_date.hour < 22  # 工作日扩大工作时间范围
         
     def _generate_job(self, job_id: int, submit_time: int) -> dict:
         """生成单个作业"""
@@ -115,23 +125,26 @@ class WorkloadGenerator:
         profiles = {}
         for job in jobs:
             job_id = job["id"]
+            walltime = job["walltime"]
             requested_resources = job["res"]
             
-            # 为每个请求的节点生成随机FLOPS
-            flops_per_node = [random.uniform(1e6, 1e7) for _ in range(requested_resources)]
+            # 根据请求的资源数调整计算量
+            # total_computing_power = 20e9 * requested_resources  # 每个节点40 GFLOPS
             
-            # 生成通信矩阵
-            com_matrix = []
-            for i in range(requested_resources):
-                row = [random.uniform(0, 1e6) if j <= i else 0 for j in range(requested_resources)]
-                com_matrix.extend(row)
+            # 设置作业的计算负载（使用20%-80%的可用计算能力）
+            flops_per_second = random.uniform(0.2, 0.8) * 1e11
+            # total_flops = flops_per_second * walltime
+            
+            # 通信量设置为计算量的1%-5%
+            comm_ratio = random.uniform(0.01, 0.05)
+            comm_amount = flops_per_second * comm_ratio
             
             profiles[f"profile_{job_id.split('_')[1]}"] = {
-                "type": "parallel",
-                "cpu": flops_per_node,
-                "com": com_matrix
+                "type": "parallel_homogeneous",
+                "cpu": flops_per_second,
+                "com": comm_amount
             }
-            
+        
         return profiles
 
 def main():
