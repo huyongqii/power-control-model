@@ -4,9 +4,15 @@ from pathlib import Path
 from typing import Dict, Tuple
 from datetime import datetime, timedelta
 from multiprocessing import Pool
+import os
+import sys
 
-INPUT_DIR = '/root/PredictModel/green-energy/data/result'
-OUTPUT_DIR = 'data'
+# 添加父目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INPUT_DIR = os.path.join(BASE_DIR,'hpc_env', 'data', 'result')
+OUTPUT_DIR = os.path.join(BASE_DIR,'power_control', 'predictor', 'data')
+
 def count_running_jobs(args):
     """计算指定时间点正在运行的作业数"""
     time, jobs_data = args

@@ -7,18 +7,16 @@ import sys
 import matplotlib.pyplot as plt
 from sklearn.model_selection import KFold
 
-# 添加父目录到 Python 路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_processor import DataProcessor
 
 # 设置matplotlib的后端，避免在没有显示设备的环境中出错
 plt.switch_backend('agg')
 
-# 全局配置
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.join(BASE_DIR,'power_control','data', 'processed_data')
-MODEL_DIR = os.path.join(BASE_DIR, 'models')
-LOG_DIR = os.path.join(BASE_DIR, 'logs')
+DATA_DIR = os.path.join(BASE_DIR,'power_control', 'predictor', 'data')
+MODEL_DIR = os.path.join(BASE_DIR,'power_control', 'predictor', 'models')
+LOG_DIR = os.path.join(BASE_DIR,'power_control', 'predictor', 'logs')
 
 # 确保目录存在
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -33,7 +31,7 @@ MODEL_CONFIG = {
     'weight_decay': 1e-5,
     'early_stopping_patience': 10,
     'model_path': os.path.join(MODEL_DIR, 'node_predictor.pth'),
-    'data_path': os.path.join(DATA_DIR, 'training_data_20250115_191728.csv'),
+    'data_path': os.path.join(DATA_DIR, 'training_data_20250115_195652.csv'),
     'log_path': os.path.join(LOG_DIR, 'training.log')
 }
 
