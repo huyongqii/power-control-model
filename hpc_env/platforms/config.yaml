@@ -1,0 +1,14 @@
+# 集群配置
+cluster:
+  num_nodes: 500  # 计算节点数量
+  node_cores: 56  # 每个节点的CPU核心数
+  node_speed: "40Gf"  # 节点计算速度
+  power:
+    idle: 250  # 空闲功耗(W)
+    full: 800  # 满载功耗(W)
+    off_: 10    # 关机功耗(W)
+
+# 作业生成配置
+workload:
+  duration_days: 30  # 生成多少天的作业数据
+  base_submit_prob: 0.8  # 基础作业提交概率 

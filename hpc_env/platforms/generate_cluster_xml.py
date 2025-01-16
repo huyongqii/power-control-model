@@ -9,14 +9,28 @@ import argparse
 from typing import Dict
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
+import yaml
 
-NUM_NODES = 500
+import sys
+import os
+
+# 添加父目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+OUTPUT_DIR = os.path.join(BASE_DIR,'hpc_env', 'data')
+CONFIG_DIR = os.path.join(BASE_DIR,'hpc_env', 'platforms')
+
+def load_config(config_file='config.yaml'):
+    """加载配置文件"""
+    with open(config_file, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
 
 class ClusterXMLGenerator:
     """集群XML配置文件生成器"""
     
-    def __init__(self, config: Dict):
-        self.num_nodes = config.get('num_nodes', NUM_NODES)
+    def __init__(self, config_file='config.yaml'):
+        config = load_config(config_file)
+        self.cluster_config = config['cluster']
         
     def generate(self, output_file: str):
         """生成XML配置文件"""
@@ -29,29 +43,27 @@ class ClusterXMLGenerator:
         zone.set('id', 'AS0')
         zone.set('routing', 'Full')
         
-        # 创建master节点 - 不显式设置role
+        # 创建master节点
         master = ET.SubElement(zone, 'host')
         master.set('id', 'master_host')
-        master.set('speed', '40Gf')
-        master.set('core', '56')
+        master.set('speed', self.cluster_config['node_speed'])
+        master.set('core', str(self.cluster_config['node_cores']))
         
         # master节点功耗属性
         master_wattage = ET.SubElement(master, 'prop')
         master_wattage.set('id', 'wattage_per_state')
-        master_wattage.set('value', '250.0:800.0')
-        
+        master_wattage.set('value', f"{self.cluster_config['power']['idle']}:{self.cluster_config['power']['full']}")
+        print(self.cluster_config['power'])
         master_wattage_off = ET.SubElement(master, 'prop')
         master_wattage_off.set('id', 'wattage_off')
-        master_wattage_off.set('value', '10')
+        master_wattage_off.set('value', str(self.cluster_config['power']['off_']))
         
         # 创建计算节点
-        for i in range(self.num_nodes):
+        for i in range(self.cluster_config['num_nodes']):
             node = ET.SubElement(zone, 'host')
             node.set('id', f'node{i}')
-            # 主机的处理速度，通常以 GHz 或 GFLOPS（浮点运算每秒）表示
-            node.set('speed', '40Gf')
-            # 主机的核心数
-            node.set('core', '56')
+            node.set('speed', self.cluster_config['node_speed'])
+            node.set('core', str(self.cluster_config['node_cores']))
             
             node_role = ET.SubElement(node, 'prop')
             node_role.set('id', 'role')
@@ -60,12 +72,12 @@ class ClusterXMLGenerator:
             # 定义主机在不同电源状态下的功耗，格式为 state1:state2:...，单位通常为瓦特（W）。
             node_wattage = ET.SubElement(node, 'prop')
             node_wattage.set('id', 'wattage_per_state')
-            node_wattage.set('value', '250:800')
+            node_wattage.set('value', f"{self.cluster_config['power']['idle']}:{self.cluster_config['power']['full']}")
             
             # 定义主机在关机状态下的功耗，单位通常为瓦特（W）。
             node_wattage_off = ET.SubElement(node, 'prop')
             node_wattage_off.set('id', 'wattage_off')
-            node_wattage_off.set('value', '10')
+            node_wattage_off.set('value', str(self.cluster_config['power']['off_']))
         
         # 生成XML字符串并格式化
         xml_str = minidom.parseString(ET.tostring(platform)).toprettyxml(indent='    ')
@@ -77,22 +89,18 @@ class ClusterXMLGenerator:
         with open(output_file, 'w') as f:
             f.write(final_xml)
             
-        print(f"Generated cluster configuration with {self.num_nodes} compute nodes: {output_file}")
+        print(f"Generated cluster configuration with {self.cluster_config['num_nodes']} compute nodes: {output_file}")
 
 def main():
     parser = argparse.ArgumentParser(description='Generate Batsim cluster platform XML')
-    parser.add_argument('--nodes', type=int, default=NUM_NODES,
-                      help='Number of compute nodes')
-    parser.add_argument('--output', type=str, default='data/cluster.xml',
+    parser.add_argument('--config', type=str, default=os.path.join(CONFIG_DIR, 'config.yaml'),
+                      help='Configuration file path')
+    parser.add_argument('--output', type=str, default=os.path.join(OUTPUT_DIR, 'cluster.xml'),
                       help='Output XML file path')
     
     args = parser.parse_args()
     
-    config = {
-        'num_nodes': args.nodes
-    }
-    
-    generator = ClusterXMLGenerator(config)
+    generator = ClusterXMLGenerator(args.config)
     generator.generate(args.output)
 
 if __name__ == "__main__":

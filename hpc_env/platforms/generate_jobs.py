@@ -2,13 +2,27 @@ import json
 import random
 from datetime import datetime, timedelta
 import holidays
+import yaml
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+OUTPUT_DIR = os.path.join(BASE_DIR,'hpc_env', 'data')
+CONFIG_DIR = os.path.join(BASE_DIR,'hpc_env', 'platforms')
+
+def load_config(config_file='config.yaml'):
+    with open(config_file, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
 
 class WorkloadGenerator:
     """生成真实场景的HPC作业负载"""
     
-    def __init__(self, total_nodes=100, duration_days=30):
-        self.total_nodes = total_nodes
-        self.duration_days = duration_days
+    def __init__(self, config_file=os.path.join(CONFIG_DIR, 'config.yaml')):
+        config = load_config(config_file)
+        self.total_nodes = config['cluster']['num_nodes']
+        self.duration_days = config['workload']['duration_days']
+        self.base_submit_prob = config['workload']['base_submit_prob']
         self.cn_holidays = holidays.CN()  # 中国节假日
         
     def generate_workload(self, output_file: str):
@@ -16,7 +30,6 @@ class WorkloadGenerator:
         jobs = []
         job_id = 0
         
-        # 生成一个月的数据
         start_date = datetime(2024, 1, 1)  # 从2024年1月1日开始
         current_time = 0  # batsim的模拟时间（秒）
         
@@ -55,7 +68,7 @@ class WorkloadGenerator:
         
     def _get_submit_probability(self, current_date: datetime) -> float:
         """获取特定时间点提交作业的概率"""
-        base_prob = 0.8  # 提高基础概率
+        base_prob = self.base_submit_prob
         
         # 节假日降低概率但不要太低
         if current_date.date() in self.cn_holidays:
@@ -132,8 +145,8 @@ class WorkloadGenerator:
             # total_computing_power = 20e9 * requested_resources  # 每个节点40 GFLOPS
             
             # 设置作业的计算负载（使用20%-80%的可用计算能力）
-            flops_per_second = random.uniform(0.2, 0.8) * 1e11
-            # total_flops = flops_per_second * walltime
+            flops_per_second = random.uniform(0.2, 0.8) * 1e12 * requested_resources
+            total_flops = flops_per_second * walltime
             
             # 通信量设置为计算量的1%-5%
             comm_ratio = random.uniform(0.01, 0.05)
@@ -148,9 +161,9 @@ class WorkloadGenerator:
         return profiles
 
 def main():
-    # 生成一个月的数据
-    generator = WorkloadGenerator(total_nodes=500, duration_days=30)
-    generator.generate_workload("data/jobs.json")
+    # 生成作业数据
+    generator = WorkloadGenerator()
+    generator.generate_workload(os.path.join(OUTPUT_DIR, 'jobs.json'))
 
 if __name__ == "__main__":
     main()

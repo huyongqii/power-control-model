@@ -7,11 +7,13 @@ from multiprocessing import Pool
 import os
 import sys
 
-# 添加父目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INPUT_DIR = os.path.join(BASE_DIR,'hpc_env', 'data', 'result')
 OUTPUT_DIR = os.path.join(BASE_DIR,'power_control', 'predictor', 'data')
+
+# 设置起始时间
+start_time = datetime(2025, 1, 1)
 
 def count_running_jobs(args):
     """计算指定时间点正在运行的作业数"""
@@ -38,9 +40,6 @@ def process_simulation_data(result_dir: str) -> pd.DataFrame:
     energy_data = pd.read_csv(result_path / 'out_consumed_energy.csv')
     jobs_data = pd.read_csv(result_path / 'out_jobs.csv')
     
-    # 设置起始时间
-    start_time = datetime(2025, 1, 1)
-    
     # 1. 处理机器状态数据
     machine_states = machine_states.rename(columns={'time': 'timestamp'})
     machine_states = machine_states.drop_duplicates(subset=['timestamp'], keep='last')
@@ -53,7 +52,6 @@ def process_simulation_data(result_dir: str) -> pd.DataFrame:
     energy_data = energy_data.set_index('timestamp')
     
     # 3. 处理作业数据
-    # 创建时间序列，包含所有关键时间点
     all_times = pd.Series(name='timestamp')
     
     # 添加作业提交、开始和结束时间
@@ -97,7 +95,63 @@ def process_simulation_data(result_dir: str) -> pd.DataFrame:
     columns_order = ['datetime', 'hour', 'day_of_week'] + [col for col in df.columns if col not in ['datetime', 'hour', 'day_of_week']]
     df = df[columns_order]
     
-    return df
+    # 在第8步之后，添加时间规整化处理
+    def round_to_nearest_minute(timestamp):
+        """将时间戳舍入到最近的整分钟"""
+        seconds = float(timestamp)
+        rounded_seconds = round(seconds / 60) * 60
+        return rounded_seconds
+
+    # 添加是否为原始数据的标志位
+    df['is_original'] = 1
+    
+    # 将时间戳规整到最近的分钟
+    df.index = df.index.map(round_to_nearest_minute)
+    
+    # 如果规整后出现重复的时间戳，保留第一条记录
+    df = df[~df.index.duplicated(keep='first')]
+    
+    # 创建完整的分钟级时间序列
+    min_time = float(df.index.min())  # 转换为 float 类型
+    max_time = float(df.index.max())  # 转换为 float 类型
+    
+    # 使用 numpy 创建时间序列
+    time_range = np.arange(
+        start=min_time,
+        stop=max_time + 60,  # 加60秒确保包含最后一分钟
+        step=60  # 每60秒一个数据点
+    )
+    
+    # 创建新的数据框
+    new_df = pd.DataFrame(index=time_range)
+    new_df.index.name = 'timestamp'
+    
+    # 使用原有数据进行插值
+    interpolated_df = df.reindex(new_df.index, method='ffill')
+    
+    # 对插值的数据设置is_original为0
+    interpolated_df.loc[~interpolated_df.index.isin(df.index), 'is_original'] = 0
+    
+    # 重新计算datetime列
+    interpolated_df['datetime'] = interpolated_df.index.map(lambda x: start_time + timedelta(seconds=float(x)))
+    interpolated_df['hour'] = interpolated_df['datetime'].dt.hour
+    interpolated_df['day_of_week'] = interpolated_df['datetime'].dt.dayofweek
+    
+    # 重新排列列的顺序
+    priority_columns = [
+        'is_original', 'datetime', 'hour', 'day_of_week',
+        'nb_computing', 'nb_idle', 'utilization_rate',
+        'running_jobs', 'waiting_jobs',
+        'wattmin', 'epower', 'energy'
+    ]
+    
+    # 获取其他列
+    other_columns = [col for col in interpolated_df.columns if col not in priority_columns]
+    
+    # 按照指定顺序重新排列列
+    final_df = interpolated_df[priority_columns + other_columns]
+    
+    return final_df
 
 def save_processed_data(df: pd.DataFrame, output_dir: str):
     """保存处理后的数据"""

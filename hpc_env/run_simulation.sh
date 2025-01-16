@@ -3,6 +3,10 @@
 # 生成工作负载
 python platforms/generate_jobs.py
 
+sleep 1
+# 生成集群配置
+python platforms/generate_cluster_xml.py
+
 # 启动BATSIM（带能耗监控）
 batsim --platform data/cluster.xml \
        --workload data/jobs.json \
