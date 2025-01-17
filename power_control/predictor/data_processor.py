@@ -197,34 +197,32 @@ class DataProcessor:
             minutes_back = days_back * 24 * 60
             historical_center_idx = current_idx - minutes_back
             
-            # # 获取历史同期时间段前后30分钟的数据
-            # start_idx = historical_center_idx - window_minutes
-            # end_idx = historical_center_idx + window_minutes
+            # 获取历史同期时间段前后30分钟的数据
+            start_idx = historical_center_idx - window_minutes
+            end_idx = historical_center_idx + window_minutes
             
-            # if start_idx >= 0 and end_idx < len(df):
-            #     # 获取完整的1小时窗口数据
-            #     window_data = df[target_col].iloc[start_idx:end_idx]
-            #     stats = [
-            #         window_data.min(),    # 最小值
-            #         window_data.max(),    # 最大值
-            #     ]
-            # elif start_idx < 0 and end_idx < len(df):
-            #     # 如果前向窗口超出范围，使用可用数据
-            #     window_data = df[target_col].iloc[:end_idx]
-            #     stats = [
-            #         window_data.min(),
-            #         window_data.max(),
-            #     ]
-            # else:
-            #     # 如果数据不可用，使用当前时间点的值
-            #     stats = [
-            #         current_value,  # 当前值作为最小值
-            #         current_value   # 当前值作为最大值
-            #     ]
-            if historical_center_idx >= 0:
-                pattern_features.append(df[target_col].iloc[historical_center_idx])
+            if start_idx >= 0 and end_idx < len(df):
+                # 获取完整的1小时窗口数据
+                window_data = df[target_col].iloc[start_idx:end_idx]
+                stats = [
+                    window_data.min(),    # 最小值
+                    window_data.max(),    # 最大值
+                ]
+            elif start_idx < 0 and end_idx < len(df):
+                # 如果前向窗口超出范围，使用可用数据
+                window_data = df[target_col].iloc[:end_idx]
+                stats = [
+                    window_data.min(),
+                    window_data.max(),
+                ]
             else:
-                pattern_features.append(current_value)
+                # 如果数据不可用，使用当前时间点的值
+                stats = [
+                    current_value,  # 当前值作为最小值
+                    current_value   # 当前值作为最大值
+                ]
+            
+            pattern_features.extend(stats)
         
         return np.array(pattern_features)
 

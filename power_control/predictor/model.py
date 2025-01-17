@@ -23,44 +23,59 @@ class NodePredictorNN(nn.Module):
     def __init__(self, feature_size: int):
         super().__init__()
         
-        # LSTM配置
-        self.lstm_hidden_size = 128
+        # 增加LSTM层数和隐藏单元
+        self.lstm_hidden_size = 256  # 增加到256
         self.lstm = nn.LSTM(
             input_size=feature_size,
             hidden_size=self.lstm_hidden_size,
-            num_layers=2,
+            num_layers=3,  # 增加到3层
             batch_first=True,
-            dropout=0.2,
+            dropout=0.3,  # 略微增加dropout
             bidirectional=True
         )
         
-        # 注意力层
-        self.attention = AttentionLayer(self.lstm_hidden_size * 2)  # 双向LSTM输出维度翻倍
+        # 多头注意力机制
+        self.multihead_attn = nn.MultiheadAttention(
+            embed_dim=self.lstm_hidden_size * 2,
+            num_heads=8,
+            dropout=0.1
+        )
         
-        # 时间特征处理 (6个时间特征)
+        # 时间特征处理增强
         self.time_fc = nn.Sequential(
-            nn.Linear(6, 32),
+            nn.Linear(6, 64),  # 增加到64
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(0.2),
+            nn.Linear(64, 32),
             nn.ReLU(),
             nn.BatchNorm1d(32),
             nn.Dropout(0.2)
         )
         
+        # 历史模式特征处理（适应新的特征维度：4天 * 5个特征 = 20）
         self.dayback_fc = nn.Sequential(
-            nn.Linear(4, 16),
+            nn.Linear(8, 32),
+            nn.ReLU(),
+            nn.BatchNorm1d(32),
+            nn.Dropout(0.2),
+            nn.Linear(32, 16),
             nn.ReLU(),
             nn.BatchNorm1d(16),
             nn.Dropout(0.2)
         )
         
-        # 计算组合特征的总维度
-        # LSTM输出: lstm_hidden_size * 2 (双向) = 256
-        # 时间特征: 32
-        # 历史同期特征: 16
-        combined_input_size = 256 + 32 + 16
+        # 调整组合特征的维度
+        combined_input_size = 512 + 32 + 16  # LSTM(256*2) + time(32) + dayback(16)
         
-        # 组合特征的全连接层
+        # 更深的全连接层
         self.combined_fc = nn.Sequential(
-            nn.Linear(combined_input_size, 128),
+            nn.Linear(combined_input_size, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(0.3),
+            
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.BatchNorm1d(128),
             nn.Dropout(0.2),
@@ -73,7 +88,7 @@ class NodePredictorNN(nn.Module):
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.BatchNorm1d(32),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),
             
             nn.Linear(32, 2)
         )
@@ -102,13 +117,16 @@ class NodePredictorNN(nn.Module):
         # LSTM处理
         lstm_out, _ = self.lstm(x_past_hour)
         
-        # 应用注意力机制
-        lstm_out, attention_weights = self.attention(lstm_out)
+        # 多头注意力处理
+        lstm_out = lstm_out.transpose(0, 1)  # [seq_len, batch_size, hidden_size]
+        attn_out, _ = self.multihead_attn(lstm_out, lstm_out, lstm_out)
+        attn_out = attn_out.transpose(0, 1)  # [batch_size, seq_len, hidden_size]
         
-        # 处理时间特征
+        # 全局平均池化
+        lstm_out = torch.mean(attn_out, dim=1)
+        
+        # 处理其他特征
         time_out = self.time_fc(x_cur_datetime)
-        
-        # 处理历史同期数据
         dayback_out = self.dayback_fc(x_dayback)
         
         # 组合所有特征
