@@ -9,8 +9,47 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
+
+class CustomEnergyLoss(nn.Module):
+    def __init__(self, alpha=1.0, beta=1.0, gamma=0.5):
+        """
+        能源预测专用的损失函数
+        
+        参数:
+            alpha (float): 过预测惩罚权重
+            beta (float): 欠预测惩罚权重
+            gamma (float): 平滑度惩罚权重
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+    
+    def forward(self, y_pred, y_true):
+        # 基础MSE损失
+        base_loss = F.mse_loss(y_pred, y_true, reduction='none')
+        
+        # 过预测惩罚（预测值大于真实值）
+        over_prediction = torch.max(y_pred - y_true, torch.zeros_like(y_pred))
+        over_prediction_loss = torch.mean(over_prediction ** 2)
+        
+        # 欠预测惩罚（预测值小于真实值）
+        under_prediction = torch.max(y_true - y_pred, torch.zeros_like(y_pred))
+        under_prediction_loss = torch.mean(under_prediction ** 2)
+        
+        # 平滑度惩罚（相邻预测值的差异）
+        smoothness_loss = torch.mean(torch.diff(y_pred, dim=0) ** 2)
+        
+        # 总损失
+        total_loss = (torch.mean(base_loss) + 
+                     self.alpha * over_prediction_loss +
+                     self.beta * under_prediction_loss +
+                     self.gamma * smoothness_loss)
+        
+        return total_loss
 
 class Trainer:
     def __init__(self):
@@ -18,6 +57,7 @@ class Trainer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.data_processor = DataProcessor()
         self.model = None
+        self.criterion = CustomEnergyLoss(alpha=1.2, beta=0.8, gamma=0.3)
 
     def train(self, data_dict: dict):
         """训练模型并记录训练过程"""
@@ -42,7 +82,6 @@ class Trainer:
             optimizer, mode='min', factor=0.5, patience=5
         )
         
-        criterion = nn.MSELoss()
         best_val_loss = float('inf')
         patience_counter = 0
         
@@ -71,7 +110,7 @@ class Trainer:
                 targets = batch['target'].to(self.device)
                 
                 outputs = self.model(past_hour, cur_datetime, dayback)
-                loss = criterion(outputs, targets)
+                loss = self.criterion(outputs, targets)
                 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -86,7 +125,7 @@ class Trainer:
             train_loss /= len(data_loaders['train'])
             
             # 验证阶段
-            val_loss = self._validate(data_loaders['val'], criterion)
+            val_loss = self._validate(data_loaders['val'], self.criterion)
             
             # 记录历史
             history['train_loss'].append(train_loss)

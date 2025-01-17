@@ -18,8 +18,8 @@ MODEL_CONFIG = {
     'learning_rate': 0.001,
     'weight_decay': 1e-5,
     'early_stopping_patience': 10,
-    'lookback_minutes': 360,
-    'forecast_minutes': 60,
+    'lookback_minutes': 24*60,
+    'forecast_minutes': 30,
     'model_dir': MODEL_DIR,  # 修正为绝对路径
     'data_path': os.path.join(DATA_DIR, 'training_data_20250116_161848.csv'),  # 修正为绝对路径
     'log_dir': LOG_DIR,  # 修正为绝对路径

@@ -75,6 +75,7 @@ class DataProcessor:
         
         self.pst_hour_feature_names = [
             'running_jobs',
+            'waiting_jobs',
             'nb_computing',
             'utilization_rate'
         ]
