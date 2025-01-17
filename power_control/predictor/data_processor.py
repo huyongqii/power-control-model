@@ -71,7 +71,6 @@ class DataProcessor:
         self.target_scaler = MinMaxScaler()
         self.dayback_scaler = MinMaxScaler()
         self.cn_holidays = holidays.CN()
-        self.feature_size = 3
         
         self.pst_hour_feature_names = [
             'running_jobs',
@@ -79,6 +78,8 @@ class DataProcessor:
             'nb_computing',
             'utilization_rate'
         ]
+
+        self.feature_size = len(self.pst_hour_feature_names)    
 
     def get_day_period(self, hour):
         """将一天分为不同时段"""
