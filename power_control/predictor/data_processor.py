@@ -174,7 +174,7 @@ class DataProcessor:
 
     def _get_dayback_features(self, df, timestamps, target_time, current_idx, target_col):
         """
-        获取历史同期时间段的特征模式
+        获取历史同期时间段的特征模式，记录前后半小时的平均值
         
         参数:
             df (pd.DataFrame): 数据框
@@ -184,47 +184,29 @@ class DataProcessor:
             target_col (str): 目标列名
             
         返回:
-            np.array: 历史模式特征
+            np.array: 一维的历史模式特征数组，维度为4 (4天的平均值)
         """
         pattern_features = []
-        window_minutes = 30  # 前后30分钟的窗口
+        window_minutes = 30  # 半小时窗口
         
         # 获取当前时间点的值作为默认值
-        current_value = df[target_col].iloc[current_idx]
+        current_value = float(df[target_col].iloc[current_idx])
         
         # 获取不同天数的历史同期数据
         for days_back in [1, 3, 5, 7]:  # 1天、3天、5天、7天前
             minutes_back = days_back * 24 * 60
             historical_center_idx = current_idx - minutes_back
             
-            # 获取历史同期时间段前后30分钟的数据
-            start_idx = historical_center_idx - window_minutes
-            end_idx = historical_center_idx + window_minutes
-            
-            if start_idx >= 0 and end_idx < len(df):
-                # 获取完整的1小时窗口数据
-                window_data = df[target_col].iloc[start_idx:end_idx]
-                stats = [
-                    window_data.min(),    # 最小值
-                    window_data.max(),    # 最大值
-                ]
-            elif start_idx < 0 and end_idx < len(df):
-                # 如果前向窗口超出范围，使用可用数据
-                window_data = df[target_col].iloc[:end_idx]
-                stats = [
-                    window_data.min(),
-                    window_data.max(),
-                ]
+            if historical_center_idx >= window_minutes and historical_center_idx + window_minutes < len(df):
+                # 计算前后一小时的平均值
+                window_avg = df[target_col].iloc[historical_center_idx - window_minutes:historical_center_idx + window_minutes].mean()
+                pattern_features.append(float(window_avg))
             else:
-                # 如果数据不可用，使用当前时间点的值
-                stats = [
-                    current_value,  # 当前值作为最小值
-                    current_value   # 当前值作为最大值
-                ]
-            
-            pattern_features.extend(stats)
+                # 如果历史数据不可用，使用当前值填充
+                pattern_features.append(current_value)
         
-        return np.array(pattern_features)
+        # 确保返回的是一维数组，长度为4 (4天的平均值)
+        return np.array(pattern_features, dtype=np.float32)
 
     def load_and_prepare_data(self) -> dict:
         """
