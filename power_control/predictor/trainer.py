@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
 class CustomEnergyLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=1.0, gamma=0.5):
+    def __init__(self, alpha=1.0, beta=1.0, gamma=0.5, delta=2.0):
         """
         能源预测专用的损失函数
         
@@ -22,13 +22,22 @@ class CustomEnergyLoss(nn.Module):
             alpha (float): 过预测惩罚权重
             beta (float): 欠预测惩罚权重
             gamma (float): 平滑度惩罚权重
+            delta (float): 负值惩罚权重
         """
         super().__init__()
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
+        self.delta = delta
     
     def forward(self, y_pred, y_true):
+        """
+        计算损失值
+        
+        参数:
+            y_pred (torch.Tensor): 预测值 [batch_size, sequence_length]
+            y_true (torch.Tensor): 真实值 [batch_size, sequence_length]
+        """
         # 基础MSE损失
         base_loss = F.mse_loss(y_pred, y_true, reduction='none')
         
@@ -40,16 +49,35 @@ class CustomEnergyLoss(nn.Module):
         under_prediction = torch.max(y_true - y_pred, torch.zeros_like(y_pred))
         under_prediction_loss = torch.mean(under_prediction ** 2)
         
+        # 负值惩罚
+        negative_values = torch.max(-y_pred, torch.zeros_like(y_pred))
+        negative_penalty = torch.mean(negative_values ** 2)
+        
         # 平滑度惩罚（相邻预测值的差异）
-        smoothness_loss = torch.mean(torch.diff(y_pred, dim=0) ** 2)
+        # 确保在时间维度上计算差分
+        if len(y_pred.shape) == 3:  # [batch_size, sequence_length, features]
+            smoothness_loss = torch.mean(torch.diff(y_pred, dim=1) ** 2)
+        else:  # [batch_size, sequence_length]
+            smoothness_loss = torch.mean(torch.diff(y_pred, dim=1) ** 2)
         
         # 总损失
         total_loss = (torch.mean(base_loss) + 
                      self.alpha * over_prediction_loss +
                      self.beta * under_prediction_loss +
-                     self.gamma * smoothness_loss)
+                     self.gamma * smoothness_loss +
+                     self.delta * negative_penalty)
         
-        return total_loss
+        # 记录各个损失组件（用于监控）
+        loss_components = {
+            'base_loss': torch.mean(base_loss).item(),
+            'over_prediction': over_prediction_loss.item(),
+            'under_prediction': under_prediction_loss.item(),
+            'smoothness': smoothness_loss.item(),
+            'negative_penalty': negative_penalty.item(),
+            'total_loss': total_loss.item()
+        }
+        
+        return total_loss, loss_components
 
 class Trainer:
     def __init__(self):
@@ -57,7 +85,21 @@ class Trainer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.data_processor = DataProcessor()
         self.model = None
-        self.criterion = CustomEnergyLoss(alpha=1.2, beta=0.8, gamma=0.3)
+        # 调整权重以更强烈地惩罚负值和过预测
+        self.criterion = CustomEnergyLoss(
+            alpha=1.2,    # 过预测惩罚
+            beta=0.8,     # 欠预测惩罚
+            gamma=0.3,    # 平滑度惩罚
+            delta=2.0     # 负值惩罚
+        )
+        self.loss_history = {
+            'base_loss': [],
+            'over_prediction': [],
+            'under_prediction': [],
+            'smoothness': [],
+            'negative_penalty': [],
+            'total_loss': []
+        }
 
     def train(self, data_dict: dict):
         """训练模型并记录训练过程"""
@@ -110,17 +152,21 @@ class Trainer:
                 targets = batch['target'].to(self.device)
                 
                 outputs = self.model(past_hour, cur_datetime, dayback)
-                loss = self.criterion(outputs, targets)
+                loss, loss_components = self.criterion(outputs, targets)
+                
+                # 记录损失组件
+                for key, value in loss_components.items():
+                    self.loss_history[key].append(value)
                 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
                 
-                train_loss += loss.item()
-
+                train_loss += loss_components['total_loss']
+                
                 progress = int(50 * batch_idx / batch_count)
                 print(f"\r进度: [{'=' * progress}{' ' * (50-progress)}] {batch_idx}/{batch_count} "
-                    f"- 当前 loss: {loss.item():.6f}", end="")
+                    f"- 当前 loss: {loss_components['total_loss']:.6f}", end="")
             
             train_loss /= len(data_loaders['train'])
             
@@ -233,22 +279,32 @@ class Trainer:
         return total_loss / batch_count if batch_count > 0 else float('inf')
 
     def _plot_training_history(self, history, save_path):
-        """
-        绘制训练历史曲线
+        """绘制更详细的训练历史"""
+        plt.figure(figsize=(15, 10))
         
-        参数:
-            history (dict): 包含训练历史的字典
-            save_path (str): 图表保存路径
-        """
-        plt.figure(figsize=(12, 8))
-        plt.plot(history['train_loss'], label='Training Loss')
-        plt.plot(history['val_loss'], label='Validation Loss')
-        plt.title('Model Loss During Training')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(os.path.join(save_path, 'training_history.png'))
+        # 创建子图
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+        
+        # 绘制总损失
+        ax1.plot(self.loss_history['total_loss'], label='Total Loss')
+        ax1.set_title('Total Loss During Training')
+        ax1.set_xlabel('Batch')
+        ax1.set_ylabel('Loss')
+        ax1.legend()
+        ax1.grid(True)
+        
+        # 绘制损失组件
+        for key in ['base_loss', 'over_prediction', 'under_prediction', 
+                   'smoothness', 'negative_penalty']:
+            ax2.plot(self.loss_history[key], label=key)
+        ax2.set_title('Loss Components During Training')
+        ax2.set_xlabel('Batch')
+        ax2.set_ylabel('Loss')
+        ax2.legend()
+        ax2.grid(True)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_path, 'detailed_training_history.png'))
         plt.close()
 
 def set_seed(seed: int = 42):

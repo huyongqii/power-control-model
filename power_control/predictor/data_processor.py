@@ -56,10 +56,14 @@ class MyDataLoader:
             data_dict[f'y_{split}']
         )
 
+        is_shuffle = False
+        if split == 'train':
+            is_shuffle = True
+
         return DataLoader(
             data_set,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=is_shuffle,
             num_workers=4,
             pin_memory=True
         )
@@ -133,13 +137,22 @@ class DataProcessor:
             target_min = np.min(target_period)
             target_max = np.max(target_period)
             target_time = timestamps[target_end - 1]
+
+            if target_min > target_max:
+                print(f"警告: 在索引 {i} 处发现最小值大于最大值")
+                print(f"最小值: {target_min}, 最大值: {target_max}")
+                print(f"目标时间: {target_time}")
+                print(f"历史数据: {past_hour_data}")
+                print(f"目标数据: {target_period}")
+                # print(df.iloc[target_end - 1])
             
             # 3. 生成时间特征
             cur_datetime_features = self._create_time_features(target_time)
             
             # 4. 获取历史模式特征
+            # TODO：是看这个时间段的，而不是这个时间点的
             dayback_features = self._get_dayback_features(
-                df, timestamps, target_time, i + lookback, 'nb_computing'
+                df, timestamps, target_time, target_end - 1, 'nb_computing'
             )
             
             # 5. 存储数据
@@ -247,7 +260,13 @@ class DataProcessor:
             cur_datetime_features[:train_size],
             dayback_features[:train_size]
         ]
-        y_train = np.hstack([target_min_values[:train_size], target_max_values[:train_size]])
+        
+        # 将目标值组合成一个二维数组进行整体缩放
+        # 训练集
+        y_train_combined = np.hstack([
+            target_min_values[:train_size],
+            target_max_values[:train_size]
+        ])
         
         # 验证集
         X_val = [
@@ -255,8 +274,12 @@ class DataProcessor:
             cur_datetime_features[train_size:train_size + val_size],
             dayback_features[train_size:train_size + val_size]
         ]
-        y_val = np.hstack([target_min_values[train_size:train_size + val_size],
-                           target_max_values[train_size:train_size + val_size]])
+        
+        # 验证集
+        y_val_combined = np.hstack([
+            target_min_values[train_size:train_size + val_size],
+            target_max_values[train_size:train_size + val_size]
+        ])
         
         # 测试集
         X_test = [
@@ -264,11 +287,13 @@ class DataProcessor:
             cur_datetime_features[train_size + val_size:],
             dayback_features[train_size + val_size:]
         ]
-        y_test = np.hstack([target_min_values[train_size + val_size:],
-                           target_max_values[train_size + val_size:]])
+        
+        # 测试集
+        y_test_combined = np.hstack([
+            target_min_values[train_size + val_size:],
+            target_max_values[train_size + val_size:]
+        ])
 
-        # 对不同类型的特征进行缩放
-        # 历史特征
         X_train[0] = self.feature_scaler.fit_transform(
             X_train[0].reshape(-1, self.feature_size)
         ).reshape(X_train[0].shape)
@@ -279,22 +304,15 @@ class DataProcessor:
             X_test[0].reshape(-1, self.feature_size)
         ).reshape(X_test[0].shape)
         
-        # 历史模式特征
+        # 历史模式特征缩放
         X_train[2] = self.dayback_scaler.fit_transform(X_train[2])
         X_val[2] = self.dayback_scaler.transform(X_val[2])
         X_test[2] = self.dayback_scaler.transform(X_test[2])
         
-        # 目标值缩放
-        y_train_min = self.target_scaler.fit_transform(y_train[:, 0].reshape(-1, 1))
-        y_train_max = self.target_scaler.transform(y_train[:, 1].reshape(-1, 1))
-        y_val_min = self.target_scaler.transform(y_val[:, 0].reshape(-1, 1))
-        y_val_max = self.target_scaler.transform(y_val[:, 1].reshape(-1, 1))
-        y_test_min = self.target_scaler.transform(y_test[:, 0].reshape(-1, 1))
-        y_test_max = self.target_scaler.transform(y_test[:, 1].reshape(-1, 1))
-
-        y_train = np.hstack([y_train_min, y_train_max])
-        y_val = np.hstack([y_val_min, y_val_max])
-        y_test = np.hstack([y_test_min, y_test_max])
+        # 整体缩放目标值
+        y_train = self.target_scaler.fit_transform(y_train_combined)
+        y_val = self.target_scaler.transform(y_val_combined)
+        y_test = self.target_scaler.transform(y_test_combined)
 
         return {
             'X_train': X_train,
@@ -306,7 +324,16 @@ class DataProcessor:
         }
 
     def inverse_transform_y(self, y_scaled):
-        """将缩放后的标签转换回原始尺度"""
-        min_values = self.target_scaler.inverse_transform(y_scaled[:, 0].reshape(-1, 1))
-        max_values = self.target_scaler.inverse_transform(y_scaled[:, 1].reshape(-1, 1))
-        return np.hstack([min_values, max_values])
+        """
+        将缩放后的标签转换回原始尺度
+        
+        参数:
+            y_scaled (np.ndarray): 形状为 (n_samples, 2) 的缩放后数据
+            
+        返回:
+            np.ndarray: 形状为 (n_samples, 2) 的原始尺度数据
+        """
+        # 直接对整个数组进行反向转换
+        y_original = self.target_scaler.inverse_transform(y_scaled)
+        return y_original
+    
