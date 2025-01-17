@@ -5,7 +5,6 @@ import seaborn as sns
 import holidays
 import os
 from datetime import datetime, timedelta
-import calendar
 import matplotlib.dates as mdates
 
 # 设置seaborn样式

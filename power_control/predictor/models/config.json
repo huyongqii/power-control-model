@@ -1,0 +1,12 @@
+{
+    "epochs": 1,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "weight_decay": 1e-05,
+    "early_stopping_patience": 10,
+    "lookback_minutes": 360,
+    "forecast_minutes": 60,
+    "model_dir": "/root/PredictModel/green-energy/power_control/predictor/models",
+    "data_path": "/root/PredictModel/green-energy/power_control/predictor/data/training_data_20250116_161848.csv",
+    "log_dir": "/root/PredictModel/green-energy/power_control/predictor/logs"
+}

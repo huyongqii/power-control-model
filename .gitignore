@@ -1,4 +1,4 @@
-hpc_env/data/*
-power_control/predictor/data/*
-power_control/predictor/models/*
-power_control/predictor/logs/*
+# hpc_env/data/*
+# power_control/predictor/data/*
+# power_control/predictor/models/*
+# power_control/predictor/logs/*

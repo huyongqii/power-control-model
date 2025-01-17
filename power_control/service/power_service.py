@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from typing import List, Dict
 
-from ..predictor.node_predictor import NodePredictor
+from ..predictor.node_predictor import Trainer
 from ..predictor.data_processor import DataProcessor
 from ..controller.power_controller import PowerController
 from ..monitor.cluster_monitor import ClusterMonitor
@@ -18,7 +18,7 @@ class PowerManagementService:
         
         # 初始化组件
         self.monitor = ClusterMonitor(config['monitor'])
-        self.predictor = NodePredictor(config['predictor'])
+        self.predictor = Trainer(config['predictor'])
         self.data_processor = DataProcessor(config['data_processor'])
         self.controller = PowerController(config['controller'])
         self.metrics = PowerMetrics()
