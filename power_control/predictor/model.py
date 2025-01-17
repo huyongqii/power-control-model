@@ -55,7 +55,7 @@ class NodePredictorNN(nn.Module):
         
         # 历史模式特征处理（适应新的特征维度：4天 * 2个特征 = 8）
         self.dayback_fc = nn.Sequential(
-            nn.Linear(8, 32),
+            nn.Linear(4, 32),
             nn.ReLU(),
             nn.BatchNorm1d(32),
             nn.Dropout(0.2),
