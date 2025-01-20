@@ -11,16 +11,15 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# 模型配置，使用绝对路径
+# 模型配置
 MODEL_CONFIG = {
     'epochs': 100,
     'batch_size': 32,
     'learning_rate': 0.001,
-    'weight_decay': 1e-5,
     'early_stopping_patience': 10,
-    'lookback_minutes': 24*60,
+    'lookback_minutes': 4 * 60,
     'forecast_minutes': 30,
-    'model_dir': MODEL_DIR,  # 修正为绝对路径
-    'data_path': os.path.join(DATA_DIR, 'training_data_20250116_161848.csv'),  # 修正为绝对路径
-    'log_dir': LOG_DIR,  # 修正为绝对路径
+    'model_dir': MODEL_DIR,
+    'data_path': os.path.join(DATA_DIR, 'training_data_20250120_190101.csv'),
+    'log_dir': LOG_DIR,
 }

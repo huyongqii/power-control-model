@@ -14,70 +14,23 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
 class CustomEnergyLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=1.0, gamma=0.5, delta=2.0):
-        """
-        能源预测专用的损失函数
-        
-        参数:
-            alpha (float): 过预测惩罚权重
-            beta (float): 欠预测惩罚权重
-            gamma (float): 平滑度惩罚权重
-            delta (float): 负值惩罚权重
-        """
+    def __init__(self):
         super().__init__()
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-        self.delta = delta
     
     def forward(self, y_pred, y_true):
-        """
-        计算损失值
+        # 使用Huber损失作为主要损失函数
+        main_loss = F.huber_loss(y_pred, y_true, delta=0.1)
         
-        参数:
-            y_pred (torch.Tensor): 预测值 [batch_size, sequence_length]
-            y_true (torch.Tensor): 真实值 [batch_size, sequence_length]
-        """
-        # 基础MSE损失
-        base_loss = F.mse_loss(y_pred, y_true, reduction='none')
+        # 添加非负约束
+        non_negative_loss = torch.mean(F.relu(-y_pred))
         
-        # 过预测惩罚（预测值大于真实值）
-        over_prediction = torch.max(y_pred - y_true, torch.zeros_like(y_pred))
-        over_prediction_loss = torch.mean(over_prediction ** 2)
+        total_loss = main_loss + 5.0 * non_negative_loss
         
-        # 欠预测惩罚（预测值小于真实值）
-        under_prediction = torch.max(y_true - y_pred, torch.zeros_like(y_pred))
-        under_prediction_loss = torch.mean(under_prediction ** 2)
-        
-        # 负值惩罚
-        negative_values = torch.max(-y_pred, torch.zeros_like(y_pred))
-        negative_penalty = torch.mean(negative_values ** 2)
-        
-        # 平滑度惩罚（相邻预测值的差异）
-        # 确保在时间维度上计算差分
-        if len(y_pred.shape) == 3:  # [batch_size, sequence_length, features]
-            smoothness_loss = torch.mean(torch.diff(y_pred, dim=1) ** 2)
-        else:  # [batch_size, sequence_length]
-            smoothness_loss = torch.mean(torch.diff(y_pred, dim=1) ** 2)
-        
-        # 总损失
-        total_loss = (torch.mean(base_loss) + 
-                     self.alpha * over_prediction_loss +
-                     self.beta * under_prediction_loss +
-                     self.gamma * smoothness_loss +
-                     self.delta * negative_penalty)
-        
-        # 记录各个损失组件（用于监控）
-        loss_components = {
-            'base_loss': torch.mean(base_loss).item(),
-            'over_prediction': over_prediction_loss.item(),
-            'under_prediction': under_prediction_loss.item(),
-            'smoothness': smoothness_loss.item(),
-            'negative_penalty': negative_penalty.item(),
+        return total_loss, {
+            'main_loss': main_loss.item(),
+            'non_negative_loss': non_negative_loss.item(),
             'total_loss': total_loss.item()
         }
-        
-        return total_loss, loss_components
 
 class Trainer:
     def __init__(self):
@@ -85,19 +38,11 @@ class Trainer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.data_processor = DataProcessor()
         self.model = None
-        # 调整权重以更强烈地惩罚负值和过预测
-        self.criterion = CustomEnergyLoss(
-            alpha=1.2,    # 过预测惩罚
-            beta=0.8,     # 欠预测惩罚
-            gamma=0.3,    # 平滑度惩罚
-            delta=2.0     # 负值惩罚
-        )
+        self.criterion = CustomEnergyLoss()
+        # 更新损失历史记录的组件，匹配新的损失函数返回值
         self.loss_history = {
-            'base_loss': [],
-            'over_prediction': [],
-            'under_prediction': [],
-            'smoothness': [],
-            'negative_penalty': [],
+            'main_loss': [],
+            'non_negative_loss': [],
             'total_loss': []
         }
 
@@ -117,11 +62,15 @@ class Trainer:
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config['learning_rate'],
-            weight_decay=1e-5
+            weight_decay=1e-4  # 增加权重衰减
         )
         
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5
+            optimizer, 
+            mode='min', 
+            factor=0.2,  # 更激进的学习率衰减
+            patience=3,   # 减少耐心值
+            min_lr=1e-6
         )
         
         best_val_loss = float('inf')
@@ -173,29 +122,30 @@ class Trainer:
             # 验证阶段
             val_loss = self._validate(data_loaders['val'], self.criterion)
             
+            # 在验证后调整学习率
+            scheduler.step(val_loss)
+            current_lr = optimizer.param_groups[0]['lr']
+            
             # 记录历史
             history['train_loss'].append(train_loss)
             history['val_loss'].append(val_loss)
-            history['learning_rates'].append(optimizer.param_groups[0]['lr'])
+            history['learning_rates'].append(current_lr)
             
-            # 更新学习率
-            scheduler.step(val_loss)
-            current_lr = optimizer.param_groups[0]['lr']
-
-            print(f"\nEpoch {epoch}/{total_epochs}:")
-            print(f"训练损失: {train_loss:.6f}")
-            print(f"验证损失: {val_loss:.6f}")
-            print(f"学习率: {current_lr:.6f}")
+            print(f"\nEpoch {epoch}: Train Loss = {train_loss:.6f}, "
+                  f"Val Loss = {val_loss:.6f}, "
+                  f"LR = {current_lr}")
             
             # 早停检查
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
+                # 保存最佳模型
                 self.save_model(optimizer, scheduler)
                 print(f"Epoch {epoch}: Val Loss improved to {val_loss:.6f}. 模型已保存。")
             else:
                 patience_counter += 1
                 print(f"Epoch {epoch}: Val Loss = {val_loss:.6f} 不改善。")
+                
                 if patience_counter >= self.config['early_stopping_patience']:
                     print(f"早停触发于 epoch {epoch}")
                     break
@@ -271,9 +221,9 @@ class Trainer:
             
             with torch.no_grad():
                 outputs = self.model(past_hour, cur_datetime, dayback)
-                loss = criterion(outputs, targets)
+                loss, loss_components = criterion(outputs, targets)
             
-            total_loss += loss.item()
+            total_loss += loss_components['total_loss']
             batch_count += 1
         
         return total_loss / batch_count if batch_count > 0 else float('inf')
@@ -294,8 +244,7 @@ class Trainer:
         ax1.grid(True)
         
         # 绘制损失组件
-        for key in ['base_loss', 'over_prediction', 'under_prediction', 
-                   'smoothness', 'negative_penalty']:
+        for key in ['main_loss', 'non_negative_loss']:  # 添加新的损失组件
             ax2.plot(self.loss_history[key], label=key)
         ax2.set_title('Loss Components During Training')
         ax2.set_xlabel('Batch')

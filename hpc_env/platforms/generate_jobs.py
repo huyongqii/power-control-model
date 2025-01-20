@@ -5,6 +5,8 @@ import holidays
 import yaml
 import sys
 import os
+import math
+import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,35 +26,39 @@ class WorkloadGenerator:
         self.duration_days = config['workload']['duration_days']
         self.base_submit_prob = config['workload']['base_submit_prob']
         self.cn_holidays = holidays.CN()  # 中国节假日
+        self.current_time = 0  # 添加current_time属性
         
     def generate_workload(self, output_file: str):
         """生成作业负载"""
         jobs = []
         job_id = 0
         
-        start_date = datetime(2024, 1, 1)  # 从2024年1月1日开始
-        current_time = 0  # batsim的模拟时间（秒）
+        start_date = datetime(2024, 1, 1)
+        self.current_time = 0
         
-        while current_time < self.duration_days * 24 * 3600:
-            # 获取当前时间点
-            current_date = start_date + timedelta(seconds=current_time)
+        while self.current_time < self.duration_days * 24 * 3600:
+            current_date = start_date + timedelta(seconds=self.current_time)
             
-            # 计算提交作业的概率
-            submit_prob = self._get_submit_probability(current_date)
+            # 获取当前时间点的lambda参数
+            lambda_param = self._get_submit_probability(current_date)
             
-            # 可能在同一时间点提交多个作业
-            num_jobs = self._get_num_jobs(submit_prob)
+            # 生成作业数量
+            num_jobs = self._get_num_jobs(lambda_param)
             
             for _ in range(num_jobs):
-                job = self._generate_job(job_id, current_time)
+                job = self._generate_job(job_id, self.current_time)
                 jobs.append(job)
                 job_id += 1
             
-            # 缩短时间间隔
+            # 使用指数分布生成下一个作业的时间间隔
             if self._is_working_hours(current_date):
-                current_time += random.randint(30, 180)  # 30秒到3分钟
+                time_delta = int(np.random.exponential(scale=180))  # 平均3分钟
+                time_delta = max(30, min(time_delta, 600))  # 限制在30秒到10分钟之间
             else:
-                current_time += random.randint(180, 600)  # 3分钟到10分钟
+                time_delta = int(np.random.exponential(scale=600))  # 平均10分钟
+                time_delta = max(180, min(time_delta, 1800))  # 限制在3分钟到30分钟之间
+            
+            self.current_time += time_delta
         
         # 保存为batsim工作负载格式
         workload = {
@@ -67,39 +73,54 @@ class WorkloadGenerator:
         print(f"Generated {len(jobs)} jobs for {self.duration_days} days")
         
     def _get_submit_probability(self, current_date: datetime) -> float:
-        """获取特定时间点提交作业的概率"""
-        base_prob = self.base_submit_prob
+        """获取特定时间点提交作业的概率
         
-        # 节假日降低概率但不要太低
+        使用基准概率结合时间因素计算lambda参数：
+        - 深夜(24:00-5:00): 极低概率 (基准概率的5%)
+        - 早晨(5:00-9:00): 较低概率 (基准概率的30%)
+        - 上午(9:00-12:00): 高峰期 (基准概率的100%)
+        - 中午(12:00-14:00): 较低概率 (基准概率的60%)
+        - 下午(14:00-18:00): 高峰期 (基准概率的100%)
+        - 晚上(18:00-24:00): 中等概率 (基准概率的80%)
+        """
+        base_lambda = self.base_submit_prob * 5  # 将基准概率转换为泊松分布的lambda参数
+        
+        # 节假日降低概率
         if current_date.date() in self.cn_holidays:
-            base_prob *= 0.5
-        # 周末降低概率但不要太低
+            base_lambda *= 0.3
+        # 周末降低概率
         elif current_date.weekday() >= 5:  # 5=周六，6=周日
-            base_prob *= 0.6
+            base_lambda *= 0.4
             
-        # 根据小时调整概率
+        # 根据小时调整lambda参数
         hour = current_date.hour
-        if 0 <= hour < 6:  # 凌晨
-            base_prob *= 0.4
-        elif 6 <= hour < 9:  # 早晨
-            base_prob *= 0.8
-        elif 9 <= hour < 17:  # 工作时间
-            base_prob *= 1.0
-        elif 17 <= hour < 20:  # 傍晚
-            base_prob *= 0.9
-        else:  # 晚上
-            base_prob *= 0.6
+        if hour < 5:  # 深夜(0:00-5:00)
+            base_lambda *= 0.05
+        elif 5 <= hour < 9:  # 早晨
+            base_lambda *= 0.3
+        elif 9 <= hour < 12:  # 上午(高峰)
+            base_lambda *= 1.0
+        elif 12 <= hour < 14:  # 中午
+            base_lambda *= 0.6
+        elif 14 <= hour < 18:  # 下午(高峰)
+            base_lambda *= 1.0
+        elif 18 <= hour < 24:  # 晚上
+            base_lambda *= 0.8
             
-        return base_prob
+        return base_lambda
     
-    def _get_num_jobs(self, prob: float) -> int:
-        """根据概率决定在当前时间点提交的作业数量"""
-        if random.random() > prob:
-            return 0
-            
-        # 在工作时间可能同时提交多个作业
-        weights = [0.5, 0.3, 0.15, 0.05]  # 权重分别对应提交1,2,3,4个作业的概率
-        return random.choices(range(1, 5), weights=weights)[0]
+    def _get_num_jobs(self, lambda_param: float) -> int:
+        """使用泊松分布生成当前时间点提交的作业数量
+        
+        Args:
+            lambda_param: 泊松分布的lambda参数
+        
+        Returns:
+            int: 生成的作业数量
+        """
+        # 使用泊松分布生成作业数量，并限制最大数量
+        num_jobs = np.random.poisson(lambda_param)
+        return min(num_jobs, 5)  # 限制单个时间点最多提交5个作业
     
     def _is_working_hours(self, current_date: datetime) -> bool:
         """判断是否为工作时间（扩大工作时间范围）"""
@@ -110,21 +131,34 @@ class WorkloadGenerator:
         return 7 <= current_date.hour < 22  # 工作日扩大工作时间范围
         
     def _generate_job(self, job_id: int, submit_time: int) -> dict:
-        """生成单个作业"""
-        # # 直接使用传入的datetime对象
-        # submit_time_str = submit_datetime.isoformat()
+        """生成单个作业
         
-        # 生成资源请求分布逻辑保持不变
-        if random.random() < 0.7:
-            requested_resources = random.randint(1, 20)
-            walltime = random.randint(300, 7200)
-        elif random.random() < 0.9:
-            requested_resources = random.randint(21, 60)
-            walltime = random.randint(7200, 43200)
-        else:
-            requested_resources = random.randint(61, self.total_nodes)
-            walltime = random.randint(43200, 86400)
-            
+        根据实际HPC环境的特点调整资源分配和运行时间:
+        - 短作业(40%): 运行时间较短，通常是测试或小型计算
+        - 中等作业(40%): 正常的计算任务
+        - 长作业(20%): 大型计算任务，运行时间较长
+        """
+        rand = random.random()
+        
+        # 首先决定作业类型和运行时间
+        if rand < 0.4:  # 短作业
+            walltime = random.randint(1800, 7200)  # 30分钟到2小时
+        elif rand < 0.8:  # 中等作业
+            walltime = random.randint(7200, 43200)  # 2小时到12小时
+        else:  # 长作业
+            walltime = random.randint(43200, 172800)  # 12小时到48小时
+        
+        # 然后决定资源需求
+        resource_rand = random.random()
+        if resource_rand < 0.8:  # 80%的作业
+            requested_resources = 1
+        elif resource_rand < 0.95:  # 15%的作业
+            requested_resources = random.randint(2, 4)
+        elif resource_rand < 0.999:  # 4.9%的作业
+            requested_resources = random.randint(5, 20)
+        else:  # 0.1%的大规模作业
+            requested_resources = random.randint(21, min(60, self.total_nodes))
+        
         return {
             "id": f"job_{job_id}",
             "subtime": submit_time,
@@ -134,27 +168,55 @@ class WorkloadGenerator:
         }
         
     def _generate_profiles(self, jobs: list) -> dict:
-        """生成作业配置文件"""
+        """生成作业配置文件
+        
+        根据节点配置(56核，每核40GF)调整计算负载：
+        - 总计算能力 = 56核 * 40GF = 2240 GF/节点
+        - 考虑实际使用率和负载分布
+        """
         profiles = {}
+        node_peak_flops = 56 * 40e9  # 每个节点的峰值计算能力（56核 * 40 GF）
+        
         for job in jobs:
             job_id = job["id"]
             walltime = job["walltime"]
             requested_resources = job["res"]
             
-            # 根据请求的资源数调整计算量
-            # total_computing_power = 20e9 * requested_resources  # 每个节点40 GFLOPS
+            # 根据作业运行时间调整负载强度
+            if walltime < 7200:  # 短作业
+                cpu_util = random.uniform(0.1, 0.15)  # 进一步降低短作业的CPU利用率
+            elif walltime < 43200:  # 中等作业
+                cpu_util = random.uniform(0.12, 0.2)  # 调整中等作业的CPU利用率范围
+            else:  # 长作业
+                cpu_util = random.uniform(0.15, 0.25)  # 适当降低长作业的CPU利用率上限
             
-            # 设置作业的计算负载（使用20%-80%的可用计算能力）
-            flops_per_second = random.uniform(0.2, 0.8) * 1e12 * requested_resources
-            total_flops = flops_per_second * walltime
+            # 计算每秒的计算负载（考虑多节点的情况）
+            # 对于多节点作业，考虑并行效率损失
+            parallel_efficiency = 1.0 if requested_resources == 1 else (0.9 - 0.1 * math.log10(requested_resources))
+            flops_per_second = (node_peak_flops * 0.01 * cpu_util * parallel_efficiency)
             
-            # 通信量设置为计算量的1%-5%
-            comm_ratio = random.uniform(0.01, 0.05)
-            comm_amount = flops_per_second * comm_ratio
+            # 总计算量需要考虑实际执行时间，而不是walltime
+            # 为长作业预留更多余量
+            if walltime > 43200:  # 12小时以上的作业
+                runtime_ratio = random.uniform(0.4, 0.7)  # 给长作业更多余量
+            else:
+                runtime_ratio = random.uniform(0.5, 0.8)
+            actual_runtime = int(walltime * runtime_ratio)
+            
+            total_flops = flops_per_second * actual_runtime
+            
+            # 通信量与节点数和运行时间相关
+            if requested_resources > 1:
+                # 多节点作业的通信量，考虑节点数的对数增长
+                comm_ratio = random.uniform(0.005, 0.02) * (1 + math.log(requested_resources) / 15)
+                comm_amount = flops_per_second * comm_ratio
+            else:
+                # 单节点作业通信量很小
+                comm_amount = flops_per_second * random.uniform(0.0005, 0.002)
             
             profiles[f"profile_{job_id.split('_')[1]}"] = {
                 "type": "parallel_homogeneous",
-                "cpu": flops_per_second,
+                "cpu": total_flops,
                 "com": comm_amount
             }
         

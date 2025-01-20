@@ -71,19 +71,21 @@ class MyDataLoader:
 class DataProcessor:
     def __init__(self):
         self.config = MODEL_CONFIG
-        self.feature_scaler = MinMaxScaler()
-        self.target_scaler = MinMaxScaler()
-        self.dayback_scaler = MinMaxScaler()
+        self.feature_scaler = MinMaxScaler(feature_range=(-1, 1))
+        self.target_scaler = MinMaxScaler(feature_range=(0, 1))
+        self.dayback_scaler = MinMaxScaler(feature_range=(-1, 1))
         self.cn_holidays = holidays.CN()
         
         self.pst_hour_feature_names = [
             'running_jobs',
             'waiting_jobs',
             'nb_computing',
-            'utilization_rate'
+            'utilization_rate',
+            'epower'  # 直接使用原始功率值
         ]
 
         self.feature_size = len(self.pst_hour_feature_names)    
+        self.base_power = 125000  # 保留基准功率值用于异常值检测
 
     def get_day_period(self, hour):
         """将一天分为不同时段"""
@@ -95,7 +97,7 @@ class DataProcessor:
             return 2  # 中午
         elif 14 <= hour < 18:
             return 3  # 下午
-        elif 18 <= hour < 22:
+        elif 18 <= hour < 24:
             return 4  # 晚上
         else:
             return 5  # 深夜
@@ -105,23 +107,20 @@ class DataProcessor:
         return date in self.cn_holidays
 
     def prepare_time_series_data(self, df):
-        """
-        准备时间序列数据
+        """准备时间序列数据"""
+        # 1. 添加数据验证
+        self._validate_input_data(df)
         
-        参数:
-            df (pd.DataFrame): 输入数据框
-            
-        返回:
-            tuple: 包含处理后的历史数据、时间特征、历史模式和目标值的元组
-        """
+        # 2. 处理异常值
+        df = self._handle_outliers(df)
+        
         lookback = self.config['lookback_minutes']
         forecast_horizon = self.config['forecast_minutes']
         
         past_hour_sequences = []  # 存储历史序列数据
         cur_datetime_feature_vectors = []  # 存储时间特征
         dayback_feature_vectors = []  # 存储历史模式特征
-        target_min_values = []  # 存储目标值
-        target_max_values = []  # 存储目标值
+        target_values = []  # 存储目标值（直接使用节点数量）
         
         timestamps = pd.to_datetime(df['datetime'])
         
@@ -132,168 +131,117 @@ class DataProcessor:
             # 2. 获取目标时间点
             target_start = i + lookback
             target_end = target_start + forecast_horizon
-            target_period = df['nb_computing'].iloc[target_start:target_end].values
+            target_value = df['nb_computing'].iloc[target_start]  # 直接使用目标时刻的节点数量
             
-            target_min = np.min(target_period)
-            target_max = np.max(target_period)
-            target_time = timestamps[target_end - 1]
-
-            if target_min > target_max:
-                print(f"警告: 在索引 {i} 处发现最小值大于最大值")
-                print(f"最小值: {target_min}, 最大值: {target_max}")
-                print(f"目标时间: {target_time}")
-                print(f"历史数据: {past_hour_data}")
-                print(f"目标数据: {target_period}")
-                # print(df.iloc[target_end - 1])
+            target_time = timestamps[target_start]
             
             # 3. 生成时间特征
-            cur_datetime_features = self._create_time_features(target_time)
+            cur_datetime_features = self._create_time_features(
+                timestamps[target_start], 
+                timestamps[target_end - 1]
+            )
             
             # 4. 获取历史模式特征
-            # TODO：是看这个时间段的，而不是这个时间点的
             dayback_features = self._get_dayback_features(
-                df, timestamps, target_time, target_end - 1, 'nb_computing'
+                df, timestamps, target_time, target_start, 'nb_computing'
             )
             
             # 5. 存储数据
             past_hour_sequences.append(past_hour_data)
             cur_datetime_feature_vectors.append(cur_datetime_features)
             dayback_feature_vectors.append(dayback_features)
-            target_min_values.append(target_min)
-            target_max_values.append(target_max)
+            target_values.append(target_value)
         
         return (np.array(past_hour_sequences),
                 np.array(cur_datetime_feature_vectors),
                 np.array(dayback_feature_vectors),
-                np.array(target_min_values).reshape(-1, 1),
-                np.array(target_max_values).reshape(-1, 1))
+                np.array(target_values).reshape(-1, 1))  # 确保目标值是二维数组
 
-    def _create_time_features(self, timestamp):
-        """
-        创建时间特征向量
+    def _create_time_features(self, start_time, end_time):
+        """创建时间范围的特征向量"""
+        is_weekend = float(start_time.dayofweek >= 5)
+        is_holiday = float(self.is_holiday(start_time.date()))
         
-        参数:
-            timestamp (datetime): 时间戳
-            
-        返回:
-            list: 时间特征向量
-        """
+        hours = pd.date_range(start_time, end_time, freq='1min').hour
+        period_counts = np.zeros(6)
+        for hour in hours:
+            period = self.get_day_period(hour)
+            period_counts[period] += 1
+        
+        main_period = np.argmax(period_counts)
+        
         return [
-            timestamp.hour / 24.0,              # 小时 (归一化到 0-1)
-            timestamp.minute / 60.0,            # 分钟 (归一化到 0-1)
-            timestamp.dayofweek / 7.0,          # 星期几 (归一化到 0-1)
-            float(timestamp.dayofweek >= 5),     # 是否周末
-            float(self.is_holiday(timestamp.date())),  # 是否节假日
-            self.get_day_period(timestamp.hour) / 6.0  # 一天中的时段 (归一化到 0-1)
+            is_weekend,         # 是否周末 (0/1)
+            is_holiday,         # 是否节假日 (0/1)
+            main_period / 6.0,  # 主要时间段 (归一化到 0-1)
         ]
 
     def _get_dayback_features(self, df, timestamps, target_time, current_idx, target_col):
-        """
-        获取历史同期时间段的特征模式，记录前后半小时的平均值
-        
-        参数:
-            df (pd.DataFrame): 数据框
-            timestamps (pd.Series): 时间戳序列
-            target_time (datetime): 目标时间点
-            current_idx (int): 当前索引
-            target_col (str): 目标列名
-            
-        返回:
-            np.array: 一维的历史模式特征数组，维度为4 (4天的平均值)
-        """
+        """获取历史模式特征的增强版本"""
         pattern_features = []
-        window_minutes = 30  # 半小时窗口
+        window_minutes = 30
         
-        # 获取当前时间点的值作为默认值
-        current_value = float(df[target_col].iloc[current_idx])
-        
-        # 获取不同天数的历史同期数据
-        for days_back in [1, 3, 5, 7]:  # 1天、3天、5天、7天前
+        for days_back in [1, 3, 5, 7]:
             minutes_back = days_back * 24 * 60
             historical_center_idx = current_idx - minutes_back
             
             if historical_center_idx >= window_minutes and historical_center_idx + window_minutes < len(df):
-                # 计算前后一小时的平均值
-                window_avg = df[target_col].iloc[historical_center_idx - window_minutes:historical_center_idx + window_minutes].mean()
-                pattern_features.append(float(window_avg))
+                # 获取历史时间段的数据
+                historical_window = df[target_col].iloc[
+                    historical_center_idx - window_minutes:
+                    historical_center_idx + window_minutes
+                ]
+                
+                # 增加更多统计特征
+                pattern_features.extend([
+                    float(historical_window.min()),     # 最小值
+                    float(historical_window.max()),     # 最大值
+                ])
             else:
-                # 如果历史数据不可用，使用当前值填充
-                pattern_features.append(current_value)
+                # 使用当前值填充
+                current_value = float(df[target_col].iloc[current_idx])
+                pattern_features.extend([current_value] * 2)  # 9个特征
         
-        # 确保返回的是一维数组，长度为4 (4天的平均值)
         return np.array(pattern_features, dtype=np.float32)
 
     def load_and_prepare_data(self) -> dict:
-        """
-        加载并准备模型训练所需的数据
-        
-        参数:
-            data (pd.DataFrame): 输入数据框
-            
-        返回:
-            dict: 包含处理后的训练、验证和测试数据的字典
-        """
+        """加载并准备模型训练所需的数据"""
         print("正在加载数据")
-
-        # 1. 加载数据
         data = pd.read_csv(self.config['data_path'])
-
-        # 确保数据按时间排序
         data = data.sort_values('datetime').reset_index(drop=True)
         
-        # 准备时间序列数据
-        past_hour_features, cur_datetime_features, dayback_features, target_min_values, target_max_values = \
+        past_hour_features, cur_datetime_features, dayback_features, target_values = \
             self.prepare_time_series_data(data)
         
-        print(f"历史序列: {past_hour_features.shape}")
-        print(f"时间特征: {cur_datetime_features.shape}")
-        print(f"模式特征: {dayback_features.shape}")
-        print(f"目标值: {target_min_values.shape}")
+        # 确保目标值非负
+        target_values = np.maximum(target_values, 0)
         
         # 划分数据集
-        train_size = int(len(target_min_values) * 0.7)
-        val_size = int(len(target_min_values) * 0.15)
+        train_size = int(len(target_values) * 0.7)
+        val_size = int(len(target_values) * 0.15)
         
-        # 训练集
         X_train = [
             past_hour_features[:train_size],
             cur_datetime_features[:train_size],
             dayback_features[:train_size]
         ]
+        y_train = target_values[:train_size]
         
-        # 将目标值组合成一个二维数组进行整体缩放
-        # 训练集
-        y_train_combined = np.hstack([
-            target_min_values[:train_size],
-            target_max_values[:train_size]
-        ])
-        
-        # 验证集
         X_val = [
             past_hour_features[train_size:train_size + val_size],
             cur_datetime_features[train_size:train_size + val_size],
             dayback_features[train_size:train_size + val_size]
         ]
+        y_val = target_values[train_size:train_size + val_size]
         
-        # 验证集
-        y_val_combined = np.hstack([
-            target_min_values[train_size:train_size + val_size],
-            target_max_values[train_size:train_size + val_size]
-        ])
-        
-        # 测试集
         X_test = [
             past_hour_features[train_size + val_size:],
             cur_datetime_features[train_size + val_size:],
             dayback_features[train_size + val_size:]
         ]
-        
-        # 测试集
-        y_test_combined = np.hstack([
-            target_min_values[train_size + val_size:],
-            target_max_values[train_size + val_size:]
-        ])
+        y_test = target_values[train_size + val_size:]
 
+        # 特征缩放
         X_train[0] = self.feature_scaler.fit_transform(
             X_train[0].reshape(-1, self.feature_size)
         ).reshape(X_train[0].shape)
@@ -309,10 +257,10 @@ class DataProcessor:
         X_val[2] = self.dayback_scaler.transform(X_val[2])
         X_test[2] = self.dayback_scaler.transform(X_test[2])
         
-        # 整体缩放目标值
-        y_train = self.target_scaler.fit_transform(y_train_combined)
-        y_val = self.target_scaler.transform(y_val_combined)
-        y_test = self.target_scaler.transform(y_test_combined)
+        # 目标值缩放
+        y_train = self.target_scaler.fit_transform(y_train)
+        y_val = self.target_scaler.transform(y_val)
+        y_test = self.target_scaler.transform(y_test)
 
         return {
             'X_train': X_train,
@@ -324,16 +272,85 @@ class DataProcessor:
         }
 
     def inverse_transform_y(self, y_scaled):
-        """
-        将缩放后的标签转换回原始尺度
+        """确保正确的反标准化"""
+        original_range = self.target_scaler.data_range_
+        original_min = self.target_scaler.data_min_
         
-        参数:
-            y_scaled (np.ndarray): 形状为 (n_samples, 2) 的缩放后数据
-            
-        返回:
-            np.ndarray: 形状为 (n_samples, 2) 的原始尺度数据
-        """
-        # 直接对整个数组进行反向转换
         y_original = self.target_scaler.inverse_transform(y_scaled)
+        
+        print(f"原始数据范围: {original_min} - {original_min + original_range}")
+        print(f"反标准化后范围: {y_original.min()} - {y_original.max()}")
+        
         return y_original
+    
+    def _validate_input_data(self, df):
+        """验证输入数据的完整性和有效性"""
+        # 检查必要的列是否存在
+        required_columns = self.pst_hour_feature_names[:-1] + ['datetime', 'epower']  # 不检查normalized列
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"缺少必要的列: {missing_columns}")
+        
+        # 检查时间戳的连续性
+        timestamps = pd.to_datetime(df['datetime'])
+        time_diff = timestamps.diff().dropna()
+        if not (time_diff == pd.Timedelta(minutes=1)).all():
+            print("警告: 时间序列不连续，可能影响预测效果")
+        
+        # 检查功率值的合理性
+        if (df['epower'] < self.base_power * 0.9).any():
+            print("警告: 存在异常低的功率值")
+        if (df['epower'] > self.base_power * 2).any():
+            print("警告: 存在异常高的功率值")
+        
+        # 检查数值的有效性
+        for col in self.pst_hour_feature_names:
+            if df[col].isnull().any():
+                print(f"警告: 列 {col} 存在空值")
+            if (df[col] < 0).any():
+                print(f"警告: 列 {col} 存在负值")
+
+    def _handle_outliers(self, df):
+        """处理异常值"""
+        df_clean = df.copy()
+        
+        # 处理功率异常值
+        power_mask = (df['epower'] < self.base_power * 0.9) | (df['epower'] > self.base_power * 2)
+        if power_mask.any():
+            print(f"发现 {power_mask.sum()} 个功率异常值")
+            # 使用移动中位数填充异常值
+            window_size = 5
+            moving_median = df['epower'].rolling(
+                window=window_size,
+                center=True,
+                min_periods=1
+            ).median()
+            df_clean.loc[power_mask, 'epower'] = moving_median[power_mask]
+        
+        for col in self.pst_hour_feature_names:
+            if col in ['running_jobs', 'waiting_jobs', 'nb_computing']:
+                # 对于作业数量，只检查负值
+                outliers = df[col] < 0
+                if outliers.any():
+                    print(f"列 {col} 发现 {outliers.sum()} 个负值")
+                    # 将负值设为0
+                    df_clean.loc[outliers, col] = 0
+                    
+            elif col == 'utilization_rate':
+                # 对于利用率，检查是否在合理范围内
+                outliers = (df[col] < 0) | (df[col] > 100)
+                if outliers.any():
+                    print(f"列 {col} 发现 {outliers.sum()} 个异常值")
+                    # 使用移动平均替换异常值
+                    window_size = 5
+                    moving_avg = df[col].rolling(
+                        window=window_size,
+                        center=True,
+                        min_periods=1
+                    ).mean()
+                    df_clean.loc[outliers, col] = moving_avg[outliers]
+            
+            print(f"列 {col} 的范围: [{df_clean[col].min()}, {df_clean[col].max()}]")
+        
+        return df_clean
     

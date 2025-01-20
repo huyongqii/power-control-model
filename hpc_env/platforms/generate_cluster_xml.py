@@ -52,7 +52,7 @@ class ClusterXMLGenerator:
         # master节点功耗属性
         master_wattage = ET.SubElement(master, 'prop')
         master_wattage.set('id', 'wattage_per_state')
-        master_wattage.set('value', f"{self.cluster_config['power']['idle']}:{self.cluster_config['power']['full']}")
+        master_wattage.set('value', f"{self.cluster_config['power']['idle']}:{self.cluster_config['power']['full']}, "10:20")
         print(self.cluster_config['power'])
         master_wattage_off = ET.SubElement(master, 'prop')
         master_wattage_off.set('id', 'wattage_off')

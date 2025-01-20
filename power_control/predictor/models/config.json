@@ -1,12 +1,11 @@
 {
-    "epochs": 1,
+    "epochs": 100,
     "batch_size": 32,
     "learning_rate": 0.001,
-    "weight_decay": 1e-05,
     "early_stopping_patience": 10,
-    "lookback_minutes": 360,
-    "forecast_minutes": 60,
-    "model_dir": "/root/PredictModel/green-energy/power_control/predictor/models",
-    "data_path": "/root/PredictModel/green-energy/power_control/predictor/data/training_data_20250116_161848.csv",
-    "log_dir": "/root/PredictModel/green-energy/power_control/predictor/logs"
+    "lookback_minutes": 240,
+    "forecast_minutes": 30,
+    "model_dir": "/home/hyq/green-energy/power_control/predictor/models",
+    "data_path": "/home/hyq/green-energy/power_control/predictor/data/training_data_20250120_190101.csv",
+    "log_dir": "/home/hyq/green-energy/power_control/predictor/logs"
 }
