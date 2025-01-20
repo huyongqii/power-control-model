@@ -16,56 +16,20 @@ plt.switch_backend('agg')
 class CustomEnergyLoss(nn.Module):
     def __init__(self):
         super().__init__()
-        self.mse_loss = nn.MSELoss()
-    
-    def forward(self, y_pred, y_true):
-        # 检查并处理无效值
-        if torch.isnan(y_pred).any() or torch.isinf(y_pred).any():
-            print("警告：预测值中存在 NaN 或 Inf")
-            y_pred = torch.nan_to_num(y_pred, nan=0.0, posinf=1e6, neginf=-1e6)
         
-        # 基础损失：使用 Huber Loss 代替 MSE，对异常值更不敏感
+    def forward(self, y_pred, y_true):
+        # 使用 Huber Loss 作为主要损失函数
         base_loss = F.huber_loss(y_pred, y_true, delta=1.0)
         
-        # 离散化损失：添加数值稳定性处理
-        discretization_loss = torch.mean(
-            torch.clamp(torch.abs(y_pred - torch.round(y_pred)), max=10.0)
-        )
+        # 添加轻微的平滑项
+        smoothness_loss = torch.mean(torch.abs(y_pred - torch.round(y_pred)))
         
-        # 极端误差惩罚：添加上下限
-        error = torch.clamp(torch.abs(y_pred - y_true), max=50.0)
-        extreme_error_mask = error > 10
-        extreme_error_loss = torch.mean(
-            torch.where(extreme_error_mask, error, torch.zeros_like(error))
-        )
-        
-        # 非负约束：添加上限
-        non_negative_loss = torch.mean(
-            torch.clamp(F.relu(-y_pred), max=10.0)
-        )
-        
-        # 使用较小的权重系数
-        total_loss = base_loss + \
-                    0.01 * discretization_loss + \
-                    0.05 * extreme_error_loss + \
-                    0.1 * non_negative_loss
-        
-        # 检查损失值
-        if torch.isnan(total_loss) or torch.isinf(total_loss):
-            print("警告：损失值为 NaN 或 Inf")
-            print(f"Base Loss: {base_loss.item()}")
-            print(f"Discretization Loss: {discretization_loss.item()}")
-            print(f"Extreme Error Loss: {extreme_error_loss.item()}")
-            print(f"Non-negative Loss: {non_negative_loss.item()}")
-            
-            # 如果发生 NaN，返回一个可以继续训练的值
-            total_loss = torch.tensor(1.0, device=total_loss.device, requires_grad=True)
+        # 总损失，降低平滑项的权重
+        total_loss = base_loss + 0.001 * smoothness_loss
         
         return total_loss, {
             'base_loss': base_loss.item(),
-            'discretization_loss': discretization_loss.item(),
-            'extreme_error_loss': extreme_error_loss.item(),
-            'non_negative_loss': non_negative_loss.item(),
+            'smoothness_loss': smoothness_loss.item(),
             'total_loss': total_loss.item()
         }
 
@@ -79,9 +43,7 @@ class Trainer:
         # 更新损失历史记录的组件
         self.loss_history = {
             'base_loss': [],
-            'discretization_loss': [],
-            'extreme_error_loss': [],
-            'non_negative_loss': [],
+            'smoothness_loss': [],
             'total_loss': []
         }
 
@@ -100,14 +62,23 @@ class Trainer:
             self.config['batch_size']
         )
         
-        # 优化器和学习率调度器
+        # 使用 AdamW 优化器
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config['learning_rate'],
-            weight_decay=1e-4
+            weight_decay=self.config['weight_decay']
         )
         
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        # 学习率预热
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, 
+            start_factor=0.1,
+            end_factor=1.0,
+            total_iters=self.config['warmup_epochs']
+        )
+        
+        # 主学习率调度器
+        main_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='min',
             factor=self.config['lr_factor'],
@@ -166,8 +137,11 @@ class Trainer:
             # 验证阶段
             val_loss = self._validate(data_loaders['val'], self.criterion)
             
-            # 在验证后调整学习率
-            scheduler.step(val_loss)
+            # 更新学习率
+            if epoch <= self.config['warmup_epochs']:
+                warmup_scheduler.step()
+            else:
+                main_scheduler.step(val_loss)
             current_lr = optimizer.param_groups[0]['lr']
             
             # 记录历史
@@ -183,7 +157,7 @@ class Trainer:
                 best_model_state = self.model.state_dict().copy()
                 patience_counter = 0
 
-                self.save_model(optimizer, scheduler)
+                self.save_model(optimizer, main_scheduler)
                 print(f"发现更好的模型！已保存模型")
             else:
                 patience_counter += 1
@@ -296,7 +270,7 @@ class Trainer:
         ax1.grid(True)
         
         # 绘制损失组件
-        for key in ['base_loss', 'discretization_loss', 'extreme_error_loss', 'non_negative_loss']:  # 添加新的损失组件
+        for key in ['base_loss', 'smoothness_loss']:  # 添加新的损失组件
             ax2.plot(self.loss_history[key], label=key)
         ax2.set_title('Loss Components During Training')
         ax2.set_xlabel('Batch')
