@@ -16,18 +16,55 @@ plt.switch_backend('agg')
 class CustomEnergyLoss(nn.Module):
     def __init__(self):
         super().__init__()
+        self.mse_loss = nn.MSELoss()
     
     def forward(self, y_pred, y_true):
-        # 使用Huber损失作为主要损失函数
-        main_loss = F.huber_loss(y_pred, y_true, delta=0.1)
+        # 检查并处理无效值
+        if torch.isnan(y_pred).any() or torch.isinf(y_pred).any():
+            print("警告：预测值中存在 NaN 或 Inf")
+            y_pred = torch.nan_to_num(y_pred, nan=0.0, posinf=1e6, neginf=-1e6)
         
-        # 添加非负约束
-        non_negative_loss = torch.mean(F.relu(-y_pred))
+        # 基础损失：使用 Huber Loss 代替 MSE，对异常值更不敏感
+        base_loss = F.huber_loss(y_pred, y_true, delta=1.0)
         
-        total_loss = main_loss + 5.0 * non_negative_loss
+        # 离散化损失：添加数值稳定性处理
+        discretization_loss = torch.mean(
+            torch.clamp(torch.abs(y_pred - torch.round(y_pred)), max=10.0)
+        )
+        
+        # 极端误差惩罚：添加上下限
+        error = torch.clamp(torch.abs(y_pred - y_true), max=50.0)
+        extreme_error_mask = error > 10
+        extreme_error_loss = torch.mean(
+            torch.where(extreme_error_mask, error, torch.zeros_like(error))
+        )
+        
+        # 非负约束：添加上限
+        non_negative_loss = torch.mean(
+            torch.clamp(F.relu(-y_pred), max=10.0)
+        )
+        
+        # 使用较小的权重系数
+        total_loss = base_loss + \
+                    0.01 * discretization_loss + \
+                    0.05 * extreme_error_loss + \
+                    0.1 * non_negative_loss
+        
+        # 检查损失值
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            print("警告：损失值为 NaN 或 Inf")
+            print(f"Base Loss: {base_loss.item()}")
+            print(f"Discretization Loss: {discretization_loss.item()}")
+            print(f"Extreme Error Loss: {extreme_error_loss.item()}")
+            print(f"Non-negative Loss: {non_negative_loss.item()}")
+            
+            # 如果发生 NaN，返回一个可以继续训练的值
+            total_loss = torch.tensor(1.0, device=total_loss.device, requires_grad=True)
         
         return total_loss, {
-            'main_loss': main_loss.item(),
+            'base_loss': base_loss.item(),
+            'discretization_loss': discretization_loss.item(),
+            'extreme_error_loss': extreme_error_loss.item(),
             'non_negative_loss': non_negative_loss.item(),
             'total_loss': total_loss.item()
         }
@@ -39,9 +76,11 @@ class Trainer:
         self.data_processor = DataProcessor()
         self.model = None
         self.criterion = CustomEnergyLoss()
-        # 更新损失历史记录的组件，匹配新的损失函数返回值
+        # 更新损失历史记录的组件
         self.loss_history = {
-            'main_loss': [],
+            'base_loss': [],
+            'discretization_loss': [],
+            'extreme_error_loss': [],
             'non_negative_loss': [],
             'total_loss': []
         }
@@ -50,48 +89,45 @@ class Trainer:
         """训练模型并记录训练过程"""
         print(f"开始在设备 {self.device} 上训练模型")
         
+        # 初始化模型
+        self.model = NodePredictorNN(
+            feature_size=self.data_processor.feature_size
+        ).to(self.device)
+        
+        # 创建数据加载器
         data_loaders = MyDataLoader().create_data_loaders(
             data_dict,
             self.config['batch_size']
         )
         
-        self.model = NodePredictorNN(
-            feature_size=self.data_processor.feature_size
-        ).to(self.device)
-        
+        # 优化器和学习率调度器
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config['learning_rate'],
-            weight_decay=1e-4  # 增加权重衰减
+            weight_decay=1e-4
         )
         
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, 
-            mode='min', 
-            factor=0.2,  # 更激进的学习率衰减
-            patience=3,   # 减少耐心值
-            min_lr=1e-6
+            optimizer,
+            mode='min',
+            factor=self.config['lr_factor'],
+            patience=self.config['lr_patience'],
+            min_lr=self.config['min_lr']
         )
         
         best_val_loss = float('inf')
+        best_model_state = None
         patience_counter = 0
-        
-        # 记录训练历史
-        history = {
-            'train_loss': [],
-            'val_loss': [],
-            'learning_rates': []
-        }
         
         for epoch in range(1, self.config['epochs'] + 1):
             # 训练阶段
             self.model.train()
             train_loss = 0
             batch_count = len(data_loaders['train'])
-            total_epochs = self.config['epochs']
+            
             print(f"\n正在训练 Epoch {epoch}/{self.config['epochs']}")
             print("进度: ", end="")
-        
+            
             for batch_idx, batch in enumerate(data_loaders['train'], 1):
                 optimizer.zero_grad()
                 
@@ -105,17 +141,25 @@ class Trainer:
                 
                 # 记录损失组件
                 for key, value in loss_components.items():
-                    self.loss_history[key].append(value)
+                    if key in self.loss_history:  # 确保键存在
+                        self.loss_history[key].append(value)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
+                # 使用配置中的梯度裁剪参数
+                if self.config['grad_clip'] > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), 
+                        self.config['grad_clip']
+                    )
+                
                 optimizer.step()
                 
                 train_loss += loss_components['total_loss']
                 
                 progress = int(50 * batch_idx / batch_count)
                 print(f"\r进度: [{'=' * progress}{' ' * (50-progress)}] {batch_idx}/{batch_count} "
-                    f"- 当前 loss: {loss_components['total_loss']:.6f}", end="")
+                      f"- 当前 loss: {loss_components['total_loss']:.6f}", end="")
             
             train_loss /= len(data_loaders['train'])
             
@@ -127,30 +171,38 @@ class Trainer:
             current_lr = optimizer.param_groups[0]['lr']
             
             # 记录历史
-            history['train_loss'].append(train_loss)
-            history['val_loss'].append(val_loss)
-            history['learning_rates'].append(current_lr)
+            history = {
+                'train_loss': [train_loss],
+                'val_loss': [val_loss],
+                'learning_rates': [current_lr]
+            }
             
-            print(f"\nEpoch {epoch}: Train Loss = {train_loss:.6f}, "
-                  f"Val Loss = {val_loss:.6f}, "
-                  f"LR = {current_lr}")
-            
-            # 早停检查
+            # 保存最佳模型
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                best_model_state = self.model.state_dict().copy()
                 patience_counter = 0
-                # 保存最佳模型
+
                 self.save_model(optimizer, scheduler)
-                print(f"Epoch {epoch}: Val Loss improved to {val_loss:.6f}. 模型已保存。")
+                print(f"发现更好的模型！已保存模型")
             else:
                 patience_counter += 1
-                print(f"Epoch {epoch}: Val Loss = {val_loss:.6f} 不改善。")
-                
-                if patience_counter >= self.config['early_stopping_patience']:
-                    print(f"早停触发于 epoch {epoch}")
-                    break
             
-            print(f"Epoch {epoch}: Train Loss = {train_loss:.6f}, Val Loss = {val_loss:.6f}, LR = {optimizer.param_groups[0]['lr']:.6f}")
+            # 打印详细的训练信息
+            print(f"\nEpoch {epoch}")
+            print(f"Train Loss: {train_loss/batch_count:.6f}")
+            print(f"Val Loss: {val_loss:.6f}")
+            print(f"Learning Rate: {current_lr:.6f}")
+            print(f"Best Val Loss: {best_val_loss:.6f}")
+            
+            # 早停检查
+            if patience_counter >= self.config['early_stopping_patience']:
+                print("Early stopping triggered")
+                break
+        
+        # 恢复最佳模型
+        if best_model_state is not None:
+            self.model.load_state_dict(best_model_state)
         
         # 绘制训练历史
         train_log_dir = self.config['log_dir']
@@ -244,7 +296,7 @@ class Trainer:
         ax1.grid(True)
         
         # 绘制损失组件
-        for key in ['main_loss', 'non_negative_loss']:  # 添加新的损失组件
+        for key in ['base_loss', 'discretization_loss', 'extreme_error_loss', 'non_negative_loss']:  # 添加新的损失组件
             ax2.plot(self.loss_history[key], label=key)
         ax2.set_title('Loss Components During Training')
         ax2.set_xlabel('Batch')

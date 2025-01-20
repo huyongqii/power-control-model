@@ -14,12 +14,16 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # 模型配置
 MODEL_CONFIG = {
     'epochs': 100,
-    'batch_size': 32,
+    'batch_size': 128,
     'learning_rate': 0.001,
-    'early_stopping_patience': 10,
+    'min_lr': 1e-6,
+    'lr_patience': 5,
+    'lr_factor': 0.5,
+    'early_stopping_patience': 15,
     'lookback_minutes': 4 * 60,
     'forecast_minutes': 30,
     'model_dir': MODEL_DIR,
     'data_path': os.path.join(DATA_DIR, 'training_data_20250120_190101.csv'),
     'log_dir': LOG_DIR,
+    'grad_clip': 1.0
 }
