@@ -38,37 +38,61 @@ class MultiHeadSelfAttention(nn.Module):
         
         return out
 
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        
+        # 前馈网络
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.activation = nn.GELU()
+    
+    def forward(self, x):
+        # 多头自注意力
+        attn_output, _ = self.self_attn(x, x, x)
+        x = x + self.dropout(attn_output)
+        x = self.norm1(x)
+        
+        # 前馈网络
+        ff_output = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        x = x + self.dropout(ff_output)
+        x = self.norm2(x)
+        
+        return x
+
 class NodePredictorNN(nn.Module):
     def __init__(self, feature_size):
         super().__init__()
         
-        # 1. 历史序列编码器
-        self.past_encoder = nn.Sequential(
-            # 第一层卷积块
-            nn.Conv1d(feature_size, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm1d(64),  # 恢复使用 BatchNorm
-            nn.Dropout(0.2),     # 保持较小的 dropout
-            
-            # 第二层卷积块
-            nn.Conv1d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm1d(128),
-            nn.Dropout(0.2),
-            
-            # 第三层卷积块
-            nn.Conv1d(128, 256, kernel_size=3, padding=1),
+        # 1. 历史序列编码器 - 使用双向LSTM替换卷积
+        hidden_size = 128
+        self.lstm = nn.LSTM(
+            input_size=feature_size,
+            hidden_size=hidden_size,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2
+        )
+        
+        # LSTM后的特征转换
+        self.past_projection = nn.Sequential(
+            nn.Linear(hidden_size * 2, 256),  # *2是因为双向
             nn.ReLU(),
             nn.BatchNorm1d(256),
-            
-            # 多头自注意力，但减少头数
-            MultiHeadSelfAttention(256, num_heads=4),  # 减少到4个头
-            nn.AdaptiveAvgPool1d(1)
+            nn.Dropout(0.2)
         )
+        
+        # 多头自注意力保持不变
+        self.attention = MultiHeadSelfAttention(256, num_heads=4)
         
         # 2. 时间特征编码器
         self.datetime_encoder = nn.Sequential(
-            nn.Linear(3, 64), # 处理时、日、周特征
+            nn.Linear(3, 64),
             nn.ReLU(),
             nn.BatchNorm1d(64),
             nn.Dropout(0.2),
@@ -80,7 +104,7 @@ class NodePredictorNN(nn.Module):
         
         # 3. 历史模式编码器
         self.dayback_encoder = nn.Sequential(
-            nn.Linear(8, 64), # 处理历史同时段特征
+            nn.Linear(8, 64),
             nn.ReLU(),
             nn.BatchNorm1d(64),
             nn.Dropout(0.2),
@@ -90,7 +114,7 @@ class NodePredictorNN(nn.Module):
             nn.Dropout(0.2)
         )
         
-        # 简化融合层
+        # 4. 特征融合
         self.fusion = nn.Sequential(
             nn.Linear(256 + 128 + 128, 256),
             nn.ReLU(),
@@ -98,37 +122,38 @@ class NodePredictorNN(nn.Module):
             nn.Dropout(0.2)
         )
         
-        # 简化预测头
+        # 5. 预测头
         self.predictor = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.BatchNorm1d(128),
             nn.Dropout(0.2),
             nn.Linear(128, 1),
-            nn.ReLU()  # 使用 ReLU 确保非负输出
+            nn.ReLU()  # 确保非负输出
         )
-        
+    
     def forward(self, past_hour, cur_datetime, dayback):
-        # 处理历史序列
-        past_hour = past_hour.transpose(1, 2)  # [B, C, L]
-        x = past_hour
+        # 1. 处理历史序列
+        # LSTM期望输入形状为 [batch_size, seq_len, feature_size]
+        lstm_out, _ = self.lstm(past_hour)  # [B, L, H*2]
         
-        # 应用三个卷积块和注意力
-        x = self.past_encoder[0:4](x)  # 第一个卷积块 [B, 64, L]
-        x = self.past_encoder[4:8](x)  # 第二个卷积块 [B, 128, L]
-        x = self.past_encoder[8:11](x)  # 第三个卷积块 [B, 256, L]
-        x = self.past_encoder[11:](x)   # 注意力和池化 [B, 256, 1]
-        past_features = x.squeeze(-1)    # [B, 256]
+        # 使用最后一个时间步的输出
+        last_hidden = lstm_out[:, -1, :]  # [B, H*2]
+        past_features = self.past_projection(last_hidden)  # [B, 256]
         
-        # 处理时间特征和历史模式特征
+        # 重塑为注意力层需要的形状
+        attention_in = past_features.unsqueeze(-1)  # [B, 256, 1]
+        past_features = self.attention(attention_in).squeeze(-1)  # [B, 256]
+        
+        # 2. 处理时间特征和历史模式特征
         datetime_features = self.datetime_encoder(cur_datetime)  # [B, 128]
         dayback_features = self.dayback_encoder(dayback)  # [B, 128]
         
-        # 特征融合
-        combined = torch.cat([past_features, datetime_features, dayback_features], dim=1)  # [B, 512]
+        # 3. 特征融合
+        combined = torch.cat([past_features, datetime_features, dayback_features], dim=1)
         fused = self.fusion(combined)
         
-        # 预测
+        # 4. 预测
         pred = self.predictor(fused)
         pred = torch.clamp(pred, min=0.0, max=1000.0)
         
