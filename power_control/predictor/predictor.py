@@ -21,7 +21,8 @@ class NodePredictor:
         try:
             checkpoint = torch.load(
                 f"{self.config['model_dir']}/checkpoint.pth",
-                map_location=self.device
+                map_location=self.device,
+                weights_only=True  # 只加载权重，提高安全性
             )
             self.model.load_state_dict(checkpoint['model_state_dict'])
             print("成功加载预训练模型")
