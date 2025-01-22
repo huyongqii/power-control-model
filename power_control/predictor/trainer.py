@@ -8,6 +8,7 @@ import random
 
 import numpy as np
 import torch
+import joblib
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -193,39 +194,25 @@ class Trainer:
         
         return history
 
-    def save_model(self, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler._LRScheduler = None):
-        """
-        保存模型、优化器和调度器的状态及配置到固定目录
-        
-        参数:
-            optimizer (torch.optim.Optimizer, optional): 优化器实例
-            scheduler (torch.optim.lr_scheduler._LRScheduler, optional): 调度器实例
-        """
+    def save_model(self, optimizer, scheduler):
+        """保存模型和scaler"""
         if self.model is None:
             raise ValueError("没有可保存的模型")
         
         # 使用配置中的模型目录
         model_dir = self.config['model_dir']
         os.makedirs(model_dir, exist_ok=True)
-        
-        model_path = os.path.join(model_dir, 'checkpoint.pth')
-        config_path = os.path.join(model_dir, 'config.json')
-        
+
         try:
-            # 创建检查点
-            checkpoint = {
+            # 保存模型
+            torch.save({
                 'model_state_dict': self.model.state_dict(),
-                'config': self.config
-            }
-            if optimizer is not None:
-                checkpoint['optimizer_state_dict'] = optimizer.state_dict()
-            if scheduler is not None:
-                checkpoint['scheduler_state_dict'] = scheduler.state_dict()
-            
-            # 保存检查点和配置
-            torch.save(checkpoint, model_path)
-            with open(config_path, 'w') as f:
-                json.dump(self.config, f, indent=4)
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'feature_scaler': self.data_processor.feature_scaler,
+                'dayback_scaler': self.data_processor.dayback_scaler,
+                'target_scaler': self.data_processor.target_scaler
+            }, f"{self.config['model_dir']}/checkpoint.pth")
             
             print(f"模型、优化器和调度器状态已保存到 {model_dir}")
             

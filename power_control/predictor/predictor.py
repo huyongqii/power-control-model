@@ -1,6 +1,7 @@
 from data_processor import DataProcessor
 from model import NodePredictorNN
 from config import MODEL_CONFIG
+import joblib  # 用于保存scaler
 
 import torch
 import numpy as np
@@ -17,17 +18,24 @@ class NodePredictor:
             feature_size=self.data_processor.feature_size
         ).to(self.device)
         
-        # 加载预训练模型
+        # 加载预训练模型和scaler
         try:
+            # 加载模型和scaler
             checkpoint = torch.load(
                 f"{self.config['model_dir']}/checkpoint.pth",
                 map_location=self.device,
                 weights_only=True  # 只加载权重，提高安全性
             )
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            print("成功加载预训练模型")
+            
+            # 加载scaler
+            self.data_processor.feature_scaler = checkpoint['feature_scaler']
+            self.data_processor.dayback_scaler = checkpoint['dayback_scaler']
+            self.data_processor.target_scaler = checkpoint['target_scaler']
+            
+            print("成功加载预训练模型和scaler")
         except Exception as e:
-            raise RuntimeError(f"加载模型失败: {str(e)}")
+            raise RuntimeError(f"加载模型或scaler失败: {str(e)}")
         
         # 设置为评估模式
         self.model.eval()
