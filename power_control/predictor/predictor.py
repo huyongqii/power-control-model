@@ -1,144 +1,119 @@
-from config import MODEL_CONFIG
-import numpy as np
-import pandas as pd
-from datetime import datetime
-from torch.utils.data import DataLoader
-import torch
+from data_processor import DataProcessor
 from model import NodePredictorNN
-from data_processor import DataProcessor, TimeSeriesDataset
+from config import MODEL_CONFIG
 
-class Predictor:
+import torch
+import numpy as np
+
+class NodePredictor:
     def __init__(self):
-        pass
-
-    def predict(self, past_hour_features: np.ndarray, cur_datetime_features: np.ndarray, 
-                dayback_features: np.ndarray) -> np.ndarray:
-        """
-        使用训练好的模型进行预测
+        """初始化预测器，加载预训练模型和数据处理器"""
+        self.config = MODEL_CONFIG
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.data_processor = DataProcessor()
         
-        参数:
-            historical_data (np.ndarray): 历史数据特征，形状为 (batch_size, lookback, feature_size)
-            time_features (np.ndarray): 时间特征，形状为 (batch_size, time_feature_size)
-            pattern_features (np.ndarray): 历史模式特征，形状为 (batch_size, pattern_feature_size)
-            
-        返回:
-            np.ndarray: 预测结果
-        """
-        if self.model is None:
-            raise ValueError("Model has not been trained or loaded yet.")
+        # 初始化模型
+        self.model = NodePredictorNN(
+            feature_size=self.data_processor.feature_size
+        ).to(self.device)
         
-        # 确保模型处于评估模式
+        # 加载预训练模型
+        try:
+            checkpoint = torch.load(
+                f"{self.config['model_dir']}/checkpoint.pth",
+                map_location=self.device
+            )
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            print("成功加载预训练模型")
+        except Exception as e:
+            raise RuntimeError(f"加载模型失败: {str(e)}")
+        
+        # 设置为评估模式
         self.model.eval()
-        
-        # 检查输入维度
-        if len(past_hour_features.shape) != 3:
-            raise ValueError(f"Expected historical_data to have 3 dimensions, "
-                           f"got shape {past_hour_features.shape}")
-        if len(cur_datetime_features.shape) != 2:
-            raise ValueError(f"Expected time_features to have 2 dimensions, "
-                           f"got shape {cur_datetime_features.shape}")
-        if len(dayback_features.shape) != 2:
-            raise ValueError(f"Expected pattern_features to have 2 dimensions, "
-                           f"got shape {dayback_features.shape}")
-        
-        # 创建数据加载器
-        predict_dataset = TimeSeriesDataset(
-            past_hour_features,
-            cur_datetime_features,
-            dayback_features,
-            np.zeros((len(past_hour_features), 1))  # 虚拟目标值
-        )
-        predict_loader = DataLoader(
-            predict_dataset,
-            batch_size=self.config['batch_size'],
-            shuffle=False,
-            num_workers=4,
-            pin_memory=True
-        )
-        
-        predictions = []
-        
-        # 进行预测
-        with torch.no_grad():
-            for batch in predict_loader:
-                past_hour = batch['past_hour'].to(self.device)
-                cur_datetime = batch['cur_datetime'].to(self.device)
-                dayback = batch['dayback'].to(self.device)
-                
-                outputs = self.model(past_hour, cur_datetime, dayback)
-                predictions.append(outputs.cpu().numpy())
-        
-        # 合并批次结果
-        predictions = np.concatenate(predictions)
-        
-        # 转换回原始尺度
-        predictions = self.data_processor.inverse_transform_y(predictions)
-        
-        return predictions
-
-    def predict_next(self, current_data: pd.DataFrame, target_time: datetime) -> int:
+    
+    def predict(self, data_path):
         """
-        预测下一个时间点的节点数
+        预测未来的计算节点数量
         
         参数:
-            current_data (pd.DataFrame): 当前时间窗口的数据
-            target_time (datetime): 目标预测时间点
+            data_path (str): CSV数据文件路径
             
         返回:
-            int: 预测的节点数（四舍五入到整数）
+            float: 预测的计算节点数量
         """
-        # 准备特征
-        historical_data = self.data_processor.prepare_historical_data(current_data)
-        time_features = self.data_processor.prepare_time_features(target_time)
-        pattern_features = self.data_processor.prepare_pattern_features(
-            current_data, target_time
-        )
-        
-        # 扩展维度以匹配批处理格式
-        historical_data = np.expand_dims(historical_data, axis=0)
-        time_features = np.expand_dims(time_features, axis=0)
-        pattern_features = np.expand_dims(pattern_features, axis=0)
-        
-        # 进行预测
-        prediction = self.predict(historical_data, time_features, pattern_features)
-        
-        # 返回四舍五入后的预测值
-        return int(round(float(prediction[0])))
-
-    def predict_sequence(self, start_data: pd.DataFrame, 
-                        forecast_steps: int) -> np.ndarray:
+        try:
+            # 1. 从CSV文件加载并处理数据
+            past_hour_data, cur_datetime, dayback_data = self.data_processor.process_single_record(data_path)
+            
+            # 2. 转换为张量
+            past_hour_tensor = torch.FloatTensor(past_hour_data).unsqueeze(0).to(self.device)
+            cur_datetime_tensor = torch.FloatTensor(cur_datetime).unsqueeze(0).to(self.device)
+            dayback_tensor = torch.FloatTensor(dayback_data).unsqueeze(0).to(self.device)
+            
+            # 3. 模型预测
+            with torch.no_grad():
+                prediction_scaled = self.model(
+                    past_hour_tensor,
+                    cur_datetime_tensor,
+                    dayback_tensor
+                )
+            
+            # 4. 反向转换预测结果
+            prediction = self.data_processor.inverse_transform_y(
+                prediction_scaled.cpu().numpy()
+            )
+            
+            # 5. 确保预测结果为非负整数
+            final_prediction = max(0, round(float(prediction[0][0])))
+            
+            return final_prediction
+            
+        except Exception as e:
+            print(f"预测过程出错: {str(e)}")
+            # 发生错误时返回一个安全的默认值
+            return 0
+    
+    def predict_batch(self, data_paths):
         """
-        预测未来多个时间步的节点数序列
+        批量预测未来的计算节点数量
         
         参数:
-            start_data (pd.DataFrame): 起始时间窗口的数据
-            forecast_steps (int): 预测步数
+            data_paths (list): CSV数据文件路径列表
             
         返回:
-            np.ndarray: 预测的节点数序列
+            np.ndarray: 预测的计算节点数量数组
         """
-        predictions = []
-        current_data = start_data.copy()
-        current_time = pd.to_datetime(current_data['datetime'].iloc[-1])
-        
-        for _ in range(forecast_steps):
-            # 更新目标时间，根据 forecast_minutes
-            current_time += pd.Timedelta(minutes=self.config['forecast_minutes'])
+        try:
+            # 1. 处理所有数据文件
+            batch_data = [self.data_processor.process_single_record(path) for path in data_paths]
+            past_hour_batch = np.stack([data[0] for data in batch_data])
+            cur_datetime_batch = np.stack([data[1] for data in batch_data])
+            dayback_batch = np.stack([data[2] for data in batch_data])
             
-            # 预测下一个时间点
-            next_value = self.predict_next(current_data, current_time)
-            predictions.append(next_value)
+            # 2. 转换为张量
+            past_hour_tensor = torch.FloatTensor(past_hour_batch).to(self.device)
+            cur_datetime_tensor = torch.FloatTensor(cur_datetime_batch).to(self.device)
+            dayback_tensor = torch.FloatTensor(dayback_batch).to(self.device)
             
-            # 更新数据框，添加预测值
-            new_row = pd.DataFrame({
-                'datetime': [current_time],
-                'nb_computing': [next_value],
-                'running_jobs': [current_data['running_jobs'].iloc[-1]],  # 使用最后一个值
-                'utilization_rate': [current_data['utilization_rate'].iloc[-1]]  # 使用最后一个值
-            })
+            # 3. 模型预测
+            with torch.no_grad():
+                predictions_scaled = self.model(
+                    past_hour_tensor,
+                    cur_datetime_tensor,
+                    dayback_tensor
+                )
             
-            # 移除最早的一行，添加新预测的一行
-            current_data = pd.concat([current_data.iloc[1:], new_row])
-            current_data.reset_index(drop=True, inplace=True)
-        
-        return np.array(predictions)
+            # 4. 反向转换预测结果
+            predictions = self.data_processor.inverse_transform_y(
+                predictions_scaled.cpu().numpy()
+            )
+            
+            # 5. 确保预测结果为非负整数
+            final_predictions = np.maximum(0, np.round(predictions)).astype(int)
+            
+            return final_predictions.flatten()
+            
+        except Exception as e:
+            print(f"批量预测过程出错: {str(e)}")
+            # 发生错误时返回一个安全的默认值数组
+            return np.zeros(len(data_paths))

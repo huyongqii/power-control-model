@@ -354,3 +354,52 @@ class DataProcessor:
         
         return df_clean
     
+    def process_single_record(self, data_path):
+        """
+        处理单条记录的数据
+        
+        参数:
+            data_path (str): CSV数据文件路径
+            
+        返回:
+            tuple: (past_hour_data, cur_datetime, dayback_data)
+                - past_hour_data: 形状为 [240, 5] 的 numpy 数组
+                - cur_datetime: 形状为 [3] 的 numpy 数组
+                - dayback_data: 形状为 [8] 的 numpy 数组
+        """
+        try:
+            # 1. 读取CSV文件
+            df = pd.read_csv(data_path)
+            
+            # 2. 验证数据完整性
+            self._validate_input_data(df)
+            
+            # 3. 处理异常值
+            df = self._handle_outliers(df)
+            
+            # 4. 提取过去4小时的特征数据
+            past_hour_data = df[self.pst_hour_feature_names].values[-self.config['lookback_minutes']:]
+            
+            # 5. 获取当前时间特征
+            current_time = pd.to_datetime(df['datetime'].iloc[-1])
+            forecast_end = current_time + pd.Timedelta(minutes=self.config['forecast_minutes'])
+            cur_datetime = np.array(self._create_time_features(current_time, forecast_end))
+            
+            # 6. 获取历史模式特征
+            dayback_data = self._get_dayback_features(
+                df, 
+                pd.to_datetime(df['datetime']), 
+                current_time, 
+                len(df)-1, 
+                'nb_computing'
+            )
+            
+            # 7. 特征缩放
+            past_hour_scaled = self.feature_scaler.transform(past_hour_data)
+            dayback_scaled = self.dayback_scaler.transform(dayback_data.reshape(1, -1))
+            
+            return past_hour_scaled, cur_datetime, dayback_scaled[0]
+            
+        except Exception as e:
+            raise RuntimeError(f"处理数据记录时出错: {str(e)}")
+    
