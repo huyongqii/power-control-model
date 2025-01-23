@@ -85,7 +85,7 @@ class DataProcessor:
         ]
 
         self.feature_size = len(self.pst_hour_feature_names)    
-        self.base_power = 125000  # 保留基准功率值用于异常值检测
+        # self.base_power = 125000  # 保留基准功率值用于异常值检测
 
     def get_day_period(self, hour):
         """将一天分为不同时段"""
@@ -298,10 +298,10 @@ class DataProcessor:
             print("警告: 时间序列不连续，可能影响预测效果")
         
         # 检查功率值的合理性
-        if (df['epower'] < self.base_power * 0.9).any():
-            print("警告: 存在异常低的功率值")
-        if (df['epower'] > self.base_power * 2).any():
-            print("警告: 存在异常高的功率值")
+        # if (df['epower'] < self.base_power * 0.9).any():
+        #     print("警告: 存在异常低的功率值")
+        # if (df['epower'] > self.base_power * 2).any():
+        #     print("警告: 存在异常高的功率值")
         
         # 检查数值的有效性
         for col in self.pst_hour_feature_names:
@@ -315,17 +315,17 @@ class DataProcessor:
         df_clean = df.copy()
         
         # 处理功率异常值
-        power_mask = (df['epower'] < self.base_power * 0.9) | (df['epower'] > self.base_power * 2)
-        if power_mask.any():
-            print(f"发现 {power_mask.sum()} 个功率异常值")
-            # 使用移动中位数填充异常值
-            window_size = 5
-            moving_median = df['epower'].rolling(
-                window=window_size,
-                center=True,
-                min_periods=1
-            ).median()
-            df_clean.loc[power_mask, 'epower'] = moving_median[power_mask]
+        # power_mask = (df['epower'] < self.base_power * 0.9) | (df['epower'] > self.base_power * 2)
+        # if power_mask.any():
+        #     print(f"发现 {power_mask.sum()} 个功率异常值")
+        #     # 使用移动中位数填充异常值
+        #     window_size = 5
+        #     moving_median = df['epower'].rolling(
+        #         window=window_size,
+        #         center=True,
+        #         min_periods=1
+        #     ).median()
+        #     df_clean.loc[power_mask, 'epower'] = moving_median[power_mask]
         
         for col in self.pst_hour_feature_names:
             if col in ['running_jobs', 'waiting_jobs', 'nb_computing']:
