@@ -47,7 +47,7 @@ class NodePowerController:
         self.current_power = 0.0      # 当前功率
 
         if os.path.exists('record.csv'):
-        os.remove('record.csv')
+            os.remove('record.csv')
         
         # 记录节点状态的字典
         self.node_states: Dict[str, Dict] = {}
