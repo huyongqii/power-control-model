@@ -39,10 +39,16 @@ class Evaluator:
         ).to(self.device)
         
         try:
-            # 使用 weights_only=True 来安全加载模型
-            checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
+            # 加载模型和scaler
+            checkpoint = torch.load(model_path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             print(f"成功从 {model_path} 加载模型")
+
+            # 加载scaler
+            # self.data_processor.feature_scaler = checkpoint['feature_scaler']
+            # self.data_processor.dayback_scaler = checkpoint['dayback_scaler']
+            # self.data_processor.target_scaler = checkpoint['target_scaler']
+            # print("成功加载scaler")
 
             if optimizer and 'optimizer_state_dict' in checkpoint:
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

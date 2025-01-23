@@ -80,8 +80,8 @@ class DataProcessor:
             'running_jobs',
             'waiting_jobs',
             'nb_computing',
-            'utilization_rate',
-            'epower'  # 直接使用原始功率值
+            'utilization_rate'
+            # 'epower'  # 直接使用原始功率值
         ]
 
         self.feature_size = len(self.pst_hour_feature_names)    
