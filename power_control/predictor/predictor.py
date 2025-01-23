@@ -126,3 +126,7 @@ class NodePredictor:
             print(f"批量预测过程出错: {str(e)}")
             # 发生错误时返回一个安全的默认值数组
             return np.zeros(len(data_paths))
+
+# if __name__ == "__main__":
+#     predictor = NodePredictor()
+#     print(predictor.predict("/home/hyq/green-energy/power_control/predictor/data/training_data_20250120_190101.csv"))

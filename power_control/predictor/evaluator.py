@@ -146,7 +146,7 @@ class Evaluator:
         predictions_discrete = np.maximum(0, np.round(predictions))
         targets_discrete = np.maximum(0, np.round(targets))
         
-        for tolerance in [0, 1, 2, 5]:
+        for tolerance in [0,1,2,3,4,5,6,7,8,9,10]:
             if tolerance == 0:
                 key = 'accuracy_exact'
             else:
@@ -314,7 +314,14 @@ def main():
     print(f"精确匹配: {metrics['accuracy_exact']:.2f}%")
     print(f"误差在 ±1 节点内: {metrics['accuracy_within_1']:.2f}%")
     print(f"误差在 ±2 节点内: {metrics['accuracy_within_2']:.2f}%")
+    print(f"误差在 ±3 节点内: {metrics['accuracy_within_3']:.2f}%")
+    print(f"误差在 ±4 节点内: {metrics['accuracy_within_4']:.2f}%")
     print(f"误差在 ±5 节点内: {metrics['accuracy_within_5']:.2f}%")
+    print(f"误差在 ±6 节点内: {metrics['accuracy_within_6']:.2f}%")
+    print(f"误差在 ±7 节点内: {metrics['accuracy_within_7']:.2f}%")
+    print(f"误差在 ±8 节点内: {metrics['accuracy_within_8']:.2f}%")
+    print(f"误差在 ±9 节点内: {metrics['accuracy_within_9']:.2f}%")
+    print(f"误差在 ±10 节点内: {metrics['accuracy_within_10']:.2f}%")
     
     dist = metrics['error_distribution']
     print("\n误差分布:")
