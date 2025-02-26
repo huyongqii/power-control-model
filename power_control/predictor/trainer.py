@@ -1,17 +1,19 @@
-from model import NodePredictorNN
-from config import MODEL_CONFIG
-from data_processor import DataProcessor, MyDataLoader
-
 import os
 import json
 import random
 
 import numpy as np
 import torch
-import joblib
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+
+
+from model import NodePredictorNN
+from config import MODEL_CONFIG
+from data_loader import DataLoader
+
+
 plt.switch_backend('agg')
 
 class CustomEnergyLoss(nn.Module):
@@ -38,30 +40,39 @@ class Trainer:
     def __init__(self):
         self.config = MODEL_CONFIG
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.data_processor = DataProcessor()
+        self.data_loader = DataLoader()
         self.model = None
         self.criterion = CustomEnergyLoss()
-        # 更新损失历史记录的组件
+        # 添加训练和验证损失的记录
         self.loss_history = {
-            'base_loss': [],
-            'smoothness_loss': [],
-            'total_loss': []
+            'train_loss': [],
+            'val_loss': []
         }
 
-    def train(self, data_dict: dict):
+    def train(self):
         """训练模型并记录训练过程"""
         print(f"开始在设备 {self.device} 上训练模型")
         
         # 初始化模型
         self.model = NodePredictorNN(
-            feature_size=self.data_processor.feature_size
+            feature_size=self.data_loader.feature_size
         ).to(self.device)
         
-        # 创建数据加载器
-        data_loaders = MyDataLoader().create_data_loaders(
-            data_dict,
-            self.config['batch_size']
-        )
+        # 创建训练集和验证集的数据加载器
+        train_loader = self.data_loader.create_data_loaders(
+            batch_size=self.config['batch_size'],
+            split='train'
+        )['train']
+        
+        val_loader = self.data_loader.create_data_loaders(
+            batch_size=self.config['batch_size'],
+            split='val'
+        )['val']
+        
+        data_loaders = {
+            'train': train_loader,
+            'val': val_loader
+        }
         
         # 使用 AdamW 优化器
         optimizer = torch.optim.AdamW(
@@ -111,10 +122,10 @@ class Trainer:
                 outputs = self.model(past_hour, cur_datetime, dayback)
                 loss, loss_components = self.criterion(outputs, targets)
                 
-                # 记录损失组件
-                for key, value in loss_components.items():
-                    if key in self.loss_history:  # 确保键存在
-                        self.loss_history[key].append(value)
+                # # 记录损失组件
+                # for key, value in loss_components.items():
+                #     if key in self.loss_history:  # 确保键存在
+                #         self.loss_history[key].append(value)
                 
                 loss.backward()
                 
@@ -158,7 +169,7 @@ class Trainer:
                 best_model_state = self.model.state_dict().copy()
                 patience_counter = 0
 
-                self.save_model(optimizer, main_scheduler)
+                self.save_model(optimizer, main_scheduler, epoch, best_val_loss)
                 print(f"发现更好的模型！已保存模型")
             else:
                 patience_counter += 1
@@ -174,6 +185,13 @@ class Trainer:
             if patience_counter >= self.config['early_stopping_patience']:
                 print("Early stopping triggered")
                 break
+            
+            # 在每个epoch结束后记录损失
+            epoch_train_loss = train_loss / batch_count
+            epoch_val_loss = val_loss
+            
+            self.loss_history['train_loss'].append(epoch_train_loss)
+            self.loss_history['val_loss'].append(epoch_val_loss)
         
         # 恢复最佳模型
         if best_model_state is not None:
@@ -183,7 +201,7 @@ class Trainer:
         train_log_dir = self.config['log_dir']
         if not os.path.exists(train_log_dir):
             os.makedirs(train_log_dir)
-        self._plot_training_history(history, train_log_dir)
+        # self._plot_training_history(history, train_log_dir)
         
         # 保存训练历史
         history_path = os.path.join(train_log_dir, 'training_history.json')
@@ -192,32 +210,25 @@ class Trainer:
         
         print("训练完成。训练历史已保存。")
         
+        # 在训练结束后绘制损失曲线
+        self._plot_loss_curves()
+        
         return history
 
-    def save_model(self, optimizer, scheduler):
-        """保存模型和scaler"""
-        if self.model is None:
-            raise ValueError("没有可保存的模型")
+    def save_model(self, optimizer, scheduler, epoch, best_val_loss):
+        """保存模型检查点"""
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'loss_history': self.loss_history
+        }
         
-        # 使用配置中的模型目录
-        model_dir = self.config['model_dir']
-        os.makedirs(model_dir, exist_ok=True)
-
-        try:
-            # 保存模型
-            torch.save({
-                'model_state_dict': self.model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'feature_scaler': self.data_processor.feature_scaler,
-                'dayback_scaler': self.data_processor.dayback_scaler,
-                'target_scaler': self.data_processor.target_scaler
-            }, f"{self.config['model_dir']}/checkpoint.pth")
-            
-            print(f"模型、优化器和调度器状态已保存到 {model_dir}")
-            
-        except Exception as e:
-            raise RuntimeError(f"保存模型时出错: {str(e)}")
+        save_path = os.path.join(self.config['model_dir'], 'checkpoint.pth')
+        torch.save(checkpoint, save_path)
+        print(f"模型检查点已保存到: {save_path}")
 
     def _validate(self, data_loader, criterion):
         """验证模型性能"""
@@ -269,6 +280,20 @@ class Trainer:
         plt.savefig(os.path.join(save_path, 'detailed_training_history.png'))
         plt.close()
 
+    def _plot_loss_curves(self):
+        """Plot training and validation loss curves"""
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.loss_history['train_loss'], label='Training Loss')
+        plt.plot(self.loss_history['val_loss'], label='Validation Loss')
+        plt.title('Training and Validation Loss Over Time')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(self.config['model_dir'], 'loss_curves.png'))
+        plt.close()
+        print(f"Loss curves saved to: {self.config['model_dir']}/loss_curves.png")
+
 def set_seed(seed: int = 42):
     """
     设置随机种子以确保结果可重现
@@ -288,8 +313,7 @@ def main():
     set_seed(42)
 
     predictor = Trainer()
-    data_dict = predictor.data_processor.load_and_prepare_data()
-    history = predictor.train(data_dict)
+    history = predictor.train()
 
 if __name__ == '__main__':
     main()

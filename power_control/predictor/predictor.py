@@ -1,65 +1,134 @@
-from data_processor import DataProcessor
-from model import NodePredictorNN
-from config import MODEL_CONFIG
-import joblib  # 用于保存scaler
-
+import os
 import torch
 import numpy as np
+import pandas as pd
+import joblib
+import holidays
+from datetime import datetime, timedelta
+from influxdb_client import InfluxDBClient
+from model import NodePredictorNN
+from config import MODEL_CONFIG
 
 class NodePredictor:
     def __init__(self):
-        """初始化预测器，加载预训练模型和数据处理器"""
+        """Initialize predictor, load pre-trained model and scalers"""
         self.config = MODEL_CONFIG
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.data_processor = DataProcessor()
+        self.cn_holidays = holidays.CN()
         
-        # 初始化模型
-        self.model = NodePredictorNN(
-            feature_size=self.data_processor.feature_size
-        ).to(self.device)
+        self.influx_client = InfluxDBClient(
+            url=self.config['influx_url'],
+            token=self.config['influx_token'],
+            org=self.config['influx_org']
+        )
         
-        # 加载预训练模型和scaler
+        self._init_model()
+    
+    def _init_model(self):
+        """Initialize and load the model and scalers"""
+        self.model = NodePredictorNN(feature_size=7).to(self.device)
+        
         try:
-            # 加载模型和scaler
             checkpoint = torch.load(
                 f"{self.config['model_dir']}/checkpoint.pth",
                 map_location=self.device,
-                weights_only=False
+                weights_only=True
             )
             self.model.load_state_dict(checkpoint['model_state_dict'])
             
-            # 加载scaler
-            self.data_processor.feature_scaler = checkpoint['feature_scaler']
-            self.data_processor.dayback_scaler = checkpoint['dayback_scaler']
-            self.data_processor.target_scaler = checkpoint['target_scaler']
+            scaler_path = os.path.join(self.config['model_dir'], "dataset_scalers.pkl")
+            scalers = joblib.load(scaler_path)
+            self.feature_scaler = scalers['feature_scaler']
+            self.target_scaler = scalers['target_scaler']
+            self.dayback_scaler = scalers['dayback_scaler']
             
-            print("成功加载预训练模型和scaler")
+            print("Successfully loaded pre-trained model and scalers")
         except Exception as e:
-            raise RuntimeError(f"加载模型或scaler失败: {str(e)}")
+            raise RuntimeError(f"Failed to load model or scalers: {str(e)}")
         
-        # 设置为评估模式
         self.model.eval()
-    
-    def predict(self, data_path):
+
+    def _query_influx(self, start_time, end_time):
         """
-        预测未来的计算节点数量
+        Query data from InfluxDB and calculate cluster-wide metrics
         
-        参数:
-            data_path (str): CSV数据文件路径
+        Args:
+            start_time: Start time for the query
+            end_time: End time for the query
             
-        返回:
-            float: 预测的计算节点数量
+        Returns:
+            pd.DataFrame: DataFrame with calculated cluster metrics
+        """
+        query = f'''
+        from(bucket: "{self.config['influx_bucket']}")
+            |> range(start: {start_time.isoformat()}, stop: {end_time.isoformat()})
+            |> pivot(rowKey:["_time", "node_id"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+        
+        result = self.influx_client.query_api().query_data_frame(query)
+        
+        if result.empty:
+            raise ValueError("No data found in InfluxDB for the specified time range")
+        
+        # Group by time and calculate cluster-wide metrics
+        cluster_metrics = result.groupby('_time').agg({
+            'job_count': 'sum',                    # Total running jobs across all nodes
+            'cpu_request_ratio': 'mean',           # Average CPU request ratio
+            'avg_cpu_per_job': 'mean',            # Average CPUs per job
+            'avg_job_runtime': 'mean',            # Average job runtime
+            'node_id': 'count'                    # Number of active nodes
+        }).reset_index()
+        
+        # Calculate cluster-wide metrics
+        df = pd.DataFrame()
+        df['datetime'] = pd.to_datetime(cluster_metrics['_time'])
+        
+        # Core metrics needed by the model
+        df['running_jobs'] = cluster_metrics['job_count']
+        df['nb_computing'] = cluster_metrics['node_id']  # Number of active nodes
+        df['avg_req_cpu_occupancy_rate'] = cluster_metrics['cpu_request_ratio']
+        df['avg_cpus_per_job'] = cluster_metrics['avg_cpu_per_job']
+        df['avg_runtime_minutes'] = cluster_metrics['avg_job_runtime']
+        
+        # Calculate derived metrics
+        df['avg_nodes_per_job'] = df['avg_cpus_per_job'] / self.config['cpus_per_node']
+        df['waiting_jobs'] = 0  # This needs to be obtained from somewhere else
+        
+        return df[['datetime', 'running_jobs', 'waiting_jobs', 'nb_computing',
+                  'avg_req_cpu_occupancy_rate', 'avg_nodes_per_job',
+                  'avg_cpus_per_job', 'avg_runtime_minutes']]
+
+    def predict(self, target_time=None):
+        """
+        Predict future computing nodes
+        
+        Args:
+            target_time (datetime, optional): Target time for prediction. 
+                                           If None, predicts for next forecast_minutes
+        
+        Returns:
+            float: Predicted number of computing nodes
         """
         try:
-            # 1. 从CSV文件加载并处理数据
-            past_hour_data, cur_datetime, dayback_data = self.data_processor.process_single_record(data_path)
+            current_time = datetime.now()
+            if target_time is None:
+                target_time = current_time + timedelta(minutes=self.config['forecast_minutes'])
             
-            # 2. 转换为张量
+            # Calculate required data range
+            lookback_minutes = self.config['lookback_minutes']
+            start_time = current_time - timedelta(minutes=lookback_minutes)
+            
+            # Get data from InfluxDB
+            df = self._query_influx(start_time, current_time)
+            
+            # Process data for prediction
+            past_hour_data, cur_datetime, dayback_data = self._process_data(df, target_time)
+            
+            # Convert to tensors and predict
             past_hour_tensor = torch.FloatTensor(past_hour_data).unsqueeze(0).to(self.device)
             cur_datetime_tensor = torch.FloatTensor(cur_datetime).unsqueeze(0).to(self.device)
             dayback_tensor = torch.FloatTensor(dayback_data).unsqueeze(0).to(self.device)
             
-            # 3. 模型预测
             with torch.no_grad():
                 prediction_scaled = self.model(
                     past_hour_tensor,
@@ -67,66 +136,101 @@ class NodePredictor:
                     dayback_tensor
                 )
             
-            # 4. 反向转换预测结果
-            prediction = self.data_processor.inverse_transform_y(
+            prediction = self.target_scaler.inverse_transform(
                 prediction_scaled.cpu().numpy()
             )
             
-            # 5. 确保预测结果为非负整数
             final_prediction = max(0, round(float(prediction[0][0])))
             
             return final_prediction
             
         except Exception as e:
-            print(f"预测过程出错: {str(e)}")
-            # 发生错误时返回一个安全的默认值
+            print(f"Prediction error: {str(e)}")
             return 0
-    
-    def predict_batch(self, data_paths):
-        """
-        批量预测未来的计算节点数量
-        
-        参数:
-            data_paths (list): CSV数据文件路径列表
-            
-        返回:
-            np.ndarray: 预测的计算节点数量数组
-        """
-        try:
-            # 1. 处理所有数据文件
-            batch_data = [self.data_processor.process_single_record(path) for path in data_paths]
-            past_hour_batch = np.stack([data[0] for data in batch_data])
-            cur_datetime_batch = np.stack([data[1] for data in batch_data])
-            dayback_batch = np.stack([data[2] for data in batch_data])
-            
-            # 2. 转换为张量
-            past_hour_tensor = torch.FloatTensor(past_hour_batch).to(self.device)
-            cur_datetime_tensor = torch.FloatTensor(cur_datetime_batch).to(self.device)
-            dayback_tensor = torch.FloatTensor(dayback_batch).to(self.device)
-            
-            # 3. 模型预测
-            with torch.no_grad():
-                predictions_scaled = self.model(
-                    past_hour_tensor,
-                    cur_datetime_tensor,
-                    dayback_tensor
-                )
-            
-            # 4. 反向转换预测结果
-            predictions = self.data_processor.inverse_transform_y(
-                predictions_scaled.cpu().numpy()
-            )
-            
-            # 5. 确保预测结果为非负整数
-            final_predictions = np.maximum(0, np.round(predictions)).astype(int)
-            
-            return final_predictions.flatten()
-            
-        except Exception as e:
-            print(f"批量预测过程出错: {str(e)}")
-            # 发生错误时返回一个安全的默认值数组
-            return np.zeros(len(data_paths))
 
-# if __name__ == "__main__":
-#     predictor = NodePredictor()
-#     print(predictor.predict("/home/hyq/green-energy/power_control/predictor/data/training_data_20250120_190101.csv"))
+    def _process_data(self, df, target_time):
+        """Process DataFrame into model input format"""
+        feature_names = [
+            'running_jobs', 'waiting_jobs', 'nb_computing',
+            'avg_req_cpu_occupancy_rate', 'avg_nodes_per_job',
+            'avg_cpus_per_job', 'avg_runtime_minutes'
+        ]
+        
+        past_hour_features = df[feature_names].values[-self.config['lookback_minutes']:]
+        
+        cur_time = df['datetime'].iloc[-1]
+        cur_datetime_features = self._create_time_features(cur_time, target_time)
+        
+        timestamps = df['datetime']
+        current_idx = len(df) - 1
+        dayback_features = self._get_dayback_features(
+            df, timestamps, cur_time, current_idx, 'nb_computing'
+        )
+        
+        past_hour_features = self.feature_scaler.transform(past_hour_features)
+        dayback_features = self.dayback_scaler.transform(dayback_features.reshape(1, -1))
+        
+        return past_hour_features, cur_datetime_features, dayback_features
+
+    def _create_time_features(self, start_time, end_time):
+        """Create time range feature vector"""
+        is_weekend = float(start_time.dayofweek >= 5)
+        is_holiday = float(self.is_holiday(start_time.date()))
+        
+        hours = pd.date_range(start_time, end_time, freq='1min').hour
+        period_counts = np.zeros(6)
+        for hour in hours:
+            period = self.get_day_period(hour)
+            period_counts[period] += 1
+        
+        main_period = np.argmax(period_counts)
+        
+        return [
+            is_weekend,         
+            is_holiday,         
+            main_period / 6.0,
+        ]
+
+    def get_day_period(self, hour):
+        """Get period of the day"""
+        if 5 <= hour < 9:
+            return 0  # early morning
+        elif 9 <= hour < 12:
+            return 1  # morning
+        elif 12 <= hour < 14:
+            return 2  # noon
+        elif 14 <= hour < 18:
+            return 3  # afternoon
+        elif 18 <= hour < 24:
+            return 4  # evening
+        else:
+            return 5  # night
+
+    def is_holiday(self, date):
+        """Check if date is holiday"""
+        return date in self.cn_holidays
+
+    def _get_dayback_features(self, df, timestamps, target_time, current_idx, target_col):
+        """Get historical pattern features"""
+        pattern_features = []
+        window_minutes = 30
+        
+        for days_back in [1, 3, 5, 7]:
+            minutes_back = days_back * 24 * 60
+            historical_center_idx = current_idx - minutes_back
+            
+            if historical_center_idx >= window_minutes and historical_center_idx + window_minutes < len(df):
+                historical_window = df[target_col].iloc[
+                    historical_center_idx - window_minutes:
+                    historical_center_idx + window_minutes
+                ]
+                
+                pattern_features.extend([
+                    float(historical_window.min()),     # min value
+                    float(historical_window.max()),     # max value
+                ])
+            else:
+                current_value = float(df[target_col].iloc[current_idx])
+                pattern_features.extend([current_value] * 2)
+        
+        return np.array(pattern_features, dtype=np.float32)

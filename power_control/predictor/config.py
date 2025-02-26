@@ -2,12 +2,9 @@ import os
 
 # 设置基础目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.join(BASE_DIR, 'power_control', 'predictor', 'data')
 MODEL_DIR = os.path.join(BASE_DIR, 'power_control', 'predictor', 'models')
 LOG_DIR = os.path.join(BASE_DIR, 'power_control', 'predictor', 'logs')
 
-# 确保目录存在
-os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -23,10 +20,13 @@ MODEL_CONFIG = {
     'weight_decay': 0.0001,
     'gradient_clip': 1.0,
     'warmup_epochs': 5,
-    'lookback_minutes': 4 * 60,
+    'lookback_minutes': 240,
     'forecast_minutes': 30,
     'model_dir': MODEL_DIR,
-    'data_path': os.path.join(DATA_DIR, 'training_data_20250120_190101.csv'),
+    'data_dir': "/home/hyq/green-energy/sk1",
+    # 'data_path': os.path.join(DATA_DIR, 'training_data_20250120_190101.csv'),
+    'data_path': "/home/hyq/green-energy/sk1/job_timeline_2021.csv",
     'log_dir': LOG_DIR,
-    'grad_clip': 1.0
+    'grad_clip': 1.0,
+    'scaler_path': "/home/hyq/green-energy/sk1/job_timeline_2023/dataset_scalers.pkl"
 }
