@@ -21,6 +21,9 @@ class CustomEnergyLoss(nn.Module):
         super().__init__()
         
     def forward(self, y_pred, y_true):
+        # 确保形状匹配：将 y_pred 从 [batch_size, 1] 转换为 [batch_size]
+        # y_pred = y_pred.squeeze()
+        
         # 使用 Huber Loss 作为主要损失函数
         base_loss = F.huber_loss(y_pred, y_true, delta=1.0)
         

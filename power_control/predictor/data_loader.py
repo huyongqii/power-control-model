@@ -29,7 +29,7 @@ class DataLoader:
     def __init__(self):
         self.config = MODEL_CONFIG
         data_filename = os.path.splitext(os.path.basename(self.config['data_path']))[0]
-        self.dataset_dir = os.path.join(self.config['data_dir'], data_filename)
+        self.dataset_dir = os.path.join(os.path.dirname(self.config['data_path']), data_filename)  
         self._load_scalers()
         self.feature_size = 6
     
@@ -93,6 +93,22 @@ class DataLoader:
         
         splits = [split] if split != 'all' else ['train', 'val', 'test']
         for current_split in splits:
+            print(f"\n{current_split} 数据集统计:")
+            for i, X_part in enumerate(data_dict[f'X_{current_split}']):
+                print(f"特征部分 {i}:")
+                print(f"范围: [{X_part.min():.6f}, {X_part.max():.6f}]")
+                print(f"均值: {X_part.mean():.6f}")
+                print(f"标准差: {X_part.std():.6f}")
+                # 添加四分位数统计
+                q1, q2, q3 = np.percentile(X_part, [25, 50, 75])
+                print(f"四分位数: Q1={q1:.6f}, Q2={q2:.6f}, Q3={q3:.6f}")
+            
+            y = data_dict[f'y_{current_split}']
+            print(f"目标值:")
+            print(f"范围: [{y.min():.6f}, {y.max():.6f}]")
+            print(f"均值: {y.mean():.6f}")
+            print(f"标准差: {y.std():.6f}")
+            
             dataset = TimeSeriesDataset(
                 data_dict[f'X_{current_split}'][0],
                 data_dict[f'X_{current_split}'][1],
@@ -111,8 +127,16 @@ class DataLoader:
         return loaders
     
     def inverse_transform_y(self, y_scaled):
-        """反转目标值的缩放"""
-        return self.target_scaler.inverse_transform(y_scaled)
+        """将缩放后的目标值转换回原始范围"""
+        # 确保输入是2D数组
+        if y_scaled.ndim == 1:
+            y_scaled = y_scaled.reshape(-1, 1)
+        
+        # 进行反向转换
+        y_original = self.target_scaler.inverse_transform(y_scaled)
+        
+        # 转回1D数组
+        return y_original.reshape(-1)
 
     def load_test_data(self):
         """加载整个数据集作为测试集"""

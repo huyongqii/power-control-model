@@ -23,10 +23,12 @@ MODEL_CONFIG = {
     'lookback_minutes': 240,
     'forecast_minutes': 30,
     'model_dir': MODEL_DIR,
-    'data_dir': "/home/hyq/green-energy/sk1",
+    # 'data_dir': "/home/hyq/green-energy/sk1",
     # 'data_path': os.path.join(DATA_DIR, 'training_data_20250120_190101.csv'),
-    'data_path': "/home/hyq/green-energy/sk1/job_timeline_2021.csv",
+    # 'data_path': "/home/hyq/green-energy/sk1/combined_job_timeline.csv",
+    'total_nodes': 150,
+    'data_path': "/home/hyq/green-energy/wm2/job_timeline_2024.csv",
     'log_dir': LOG_DIR,
     'grad_clip': 1.0,
-    'scaler_path': "/home/hyq/green-energy/sk1/job_timeline_2023/dataset_scalers.pkl"
+    'scaler_path': "/home/hyq/green-energy/sk1/job_timeline_2024/dataset_scalers.pkl"
 }

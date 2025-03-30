@@ -4,29 +4,48 @@ import holidays
 import pandas as pd
 import numpy as np
 from config import MODEL_CONFIG
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import RobustScaler, MinMaxScaler
 
 class DataProcessor:
     def __init__(self):
         self.config = MODEL_CONFIG
-        self.feature_scaler = MinMaxScaler(feature_range=(-1, 1))
-        self.target_scaler = MinMaxScaler(feature_range=(0, 1))
-        self.dayback_scaler = MinMaxScaler(feature_range=(-1, 1))
+        
+        # 1. 修改scaler的配置
+        self.feature_scaler = RobustScaler(
+            with_centering=True,
+            with_scaling=True,
+            quantile_range=(5.0, 95.0)  # 使用更宽的四分位范围
+        )
+        
+        # 2. 修改目标值的scaler
+        self.target_scaler = MinMaxScaler(
+            feature_range=(0, 1)  # 改为0-1范围，因为是百分比
+        )
+        
+        self.dayback_scaler = RobustScaler(
+            with_centering=True,
+            with_scaling=True,
+            quantile_range=(5.0, 95.0)
+        )
+        
         self.cn_holidays = holidays.CN()
         
         self.pst_hour_feature_names = [
             'running_job_count',
-            'waiting_job_count',
+            # 'waiting_job_count',
+            # 'active_node_ratio',  # 改为使用比例
             'active_node_count',
+            # 'utilization_rate',
             'avg_req_cpu_occupancy_rate',
-            # 'avg_req_node_per_job',
+            'avg_req_node_per_job',
             'avg_req_cpu_per_job',
             'avg_runtime_minutes'
         ]
         
         self.feature_size = len(self.pst_hour_feature_names)
-        data_filename = os.path.splitext(os.path.basename(self.config['data_path']))[0]
-        self.dataset_dir = os.path.join(self.config['data_dir'], data_filename)
+        data_path = self.config['data_path']
+        data_filename = os.path.splitext(os.path.basename(data_path))[0]
+        self.dataset_dir = os.path.join(os.path.dirname(data_path), data_filename)
         os.makedirs(self.dataset_dir, exist_ok=True)
 
     def process_and_save_data(self):
@@ -85,7 +104,7 @@ class DataProcessor:
                 )
                 
                 data_dict[f'y_{split}'] = self.target_scaler.fit_transform(
-                    data_dict[f'y_{split}']
+                    data_dict[f'y_{split}'].reshape(-1, 1)
                 )
             else:
                 # 在验证集和测试集上只进行转换
@@ -98,7 +117,7 @@ class DataProcessor:
                 )
                 
                 data_dict[f'y_{split}'] = self.target_scaler.transform(
-                    data_dict[f'y_{split}']
+                    data_dict[f'y_{split}'].reshape(-1, 1)
                 )
         
         # 保存处理好的数据集
@@ -108,10 +127,14 @@ class DataProcessor:
     def prepare_time_series_data(self, df):
         """准备时间序列数据"""
         # 1. 添加数据验证
-        self._validate_input_data(df)
+        # self._validate_input_data(df)
         
         # 2. 处理异常值
-        df = self._handle_outliers(df)
+        # df = self._handle_outliers(df)
+        
+        # 3. 将active_node_count转换为占比
+        # total_nodes = self.config['total_nodes']
+        # df['active_node_ratio'] = df['active_node_count'] / total_nodes
         
         lookback = self.config['lookback_minutes']
         forecast_horizon = self.config['forecast_minutes']
@@ -124,15 +147,13 @@ class DataProcessor:
         timestamps = pd.to_datetime(df['datetime'])
         
         for i in range(len(df) - lookback - forecast_horizon + 1):
-            # 1. 提取历史序列数据
+            # 1. 提取历史序列数据（现在使用的是节点占比）
             past_hour_data = df[self.pst_hour_feature_names].iloc[i:(i + lookback)].values
             
-            # 2. 获取目标时间点
+            # 2. 获取目标时间点（目标值也是节点占比）
             target_start = i + lookback
             target_end = target_start + forecast_horizon
             target_value = df['active_node_count'].iloc[target_end-1]
-            
-            target_time = timestamps[target_start]
             
             # 3. 生成时间特征
             cur_datetime_features = self._create_time_features(
@@ -142,7 +163,7 @@ class DataProcessor:
             
             # 4. 获取历史模式特征
             dayback_features = self._get_dayback_features(
-                df, timestamps, target_time, target_start, 'active_node_count'
+                df, target_start, 'active_node_count'
             )
             
             past_hour_sequences.append(past_hour_data)
@@ -193,38 +214,28 @@ class DataProcessor:
         """判断是否为节假日"""
         return date in self.cn_holidays
 
-    def _get_dayback_features(self, df, timestamps, target_time, current_idx, target_col):
+    def _get_dayback_features(self, df, current_idx, target_col):
         """获取历史模式特征"""
         pattern_features = []
-        window_minutes = 30
+        total_nodes = self.config['total_nodes']  # 需要在配置中添加总节点数
         
         for days_back in [1, 3, 5, 7]:
             minutes_back = days_back * 24 * 60
             historical_center_idx = current_idx - minutes_back
             
-            if historical_center_idx >= window_minutes and historical_center_idx + window_minutes < len(df):
-                # 获取历史时间段的数据
-                historical_window = df[target_col].iloc[
-                    historical_center_idx - window_minutes:
-                    historical_center_idx + window_minutes
-                ]
-                
-                # 增加更多统计特征
-                pattern_features.extend([
-                    float(historical_window.min()),     # 最小值
-                    float(historical_window.max()),     # 最大值
-                ])
+            if 0 <= historical_center_idx < len(df):
+                # 将历史节点数也转换为占比
+                pattern_features.append(float(df[target_col].iloc[historical_center_idx]) / total_nodes)
             else:
-                # 使用当前值填充
-                current_value = float(df[target_col].iloc[current_idx])
-                pattern_features.extend([current_value] * 2)
+                current_value = float(df[target_col].iloc[current_idx]) / total_nodes
+                pattern_features.append(current_value)
         
         return np.array(pattern_features, dtype=np.float32)
 
     def _validate_input_data(self, df):
         """验证输入数据的完整性和有效性"""
         # 检查必要的列是否存在
-        required_columns = self.pst_hour_feature_names + ['datetime', 'active_node_count']
+        required_columns = self.pst_hour_feature_names + ['datetime']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"缺少必要的列: {missing_columns}")

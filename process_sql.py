@@ -4,14 +4,13 @@ import csv
 from datetime import datetime
 from collections import defaultdict
 
-CPUS_PER_NODE = 32
+CPUS_PER_NODE = 64
 
-# 数据库连接参数
 DB_CONFIG = {
     'host': 'localhost',
     'user': 'hyq',
     'password': 'hyq',
-    'database': 'sk1db',
+    'database': 'wm2',
     'charset': 'utf8mb4'
 }
 
@@ -50,7 +49,7 @@ def get_job_minutes(start, end):
 
 def write_to_csv(year, timeline):
     """将统计结果按年写入CSV文件"""
-    output_filename = f'sk1/job_timeline_{year}.csv'
+    output_filename = f'wm2/job_timeline_{year}.csv'
     with open(output_filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -109,7 +108,7 @@ def main():
             sql = """
             SELECT DISTINCT j.job_db_inx, j.time_submit, j.time_start, j.time_end, 
                    j.node_inx, j.cpus_req 
-            FROM life_job_table j
+            FROM wm2_job_table j
             WHERE j.state = 3                  -- 成功完成的作业
               AND j.node_inx IS NOT NULL       -- 有节点信息
               AND j.node_inx != ''             -- 节点信息不为空字符串
@@ -161,13 +160,13 @@ def main():
                 nodes_count = len(nodes)
                 
                 for minute_ts in get_job_minutes(ts_start, ts_end):
-                    if minute_ts < ts_end:
-                        timeline[minute_ts]['running'] += 1
-                        timeline[minute_ts]['active_nodes'].update(nodes)
-                        timeline[minute_ts]['total_cpu_req'] += cpus_req
-                        timeline[minute_ts]['total_nodes_per_job'] += nodes_count
-                        current_runtime = minute_ts - ts_start
-                        timeline[minute_ts]['total_runtime'] += current_runtime
+                    # if minute_ts < ts_end:
+                    timeline[minute_ts]['running'] += 1
+                    timeline[minute_ts]['active_nodes'].update(nodes)
+                    timeline[minute_ts]['total_cpu_req'] += cpus_req
+                    timeline[minute_ts]['total_nodes_per_job'] += nodes_count
+                    current_runtime = minute_ts - ts_start
+                    timeline[minute_ts]['total_runtime'] += current_runtime
 
         # 处理等待中的作业
         if ts_submit and ts_start:

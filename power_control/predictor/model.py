@@ -104,7 +104,7 @@ class NodePredictorNN(nn.Module):
         
         # 3. 历史模式编码器
         self.dayback_encoder = nn.Sequential(
-            nn.Linear(8, 64),
+            nn.Linear(4, 64), 
             nn.ReLU(),
             nn.BatchNorm1d(64),
             nn.Dropout(0.2),

@@ -8,7 +8,7 @@ from model import NodePredictorNN
 from data_loader import DataLoader
 
 
-error_range = 11
+error_range = 30
 
 class Evaluator:
     def __init__(self):
@@ -45,14 +45,14 @@ class Evaluator:
         self.load_model()
 
         # 2. 获取测试数据加载器
-        test_loaders = self.data_loader.create_data_loaders(
-            batch_size=self.config['batch_size'],
-            split='test'
-        )
-        test_loader = test_loaders['test']
-        # test_loader = self.data_loader.create_test_loader(
-        #     batch_size=self.config['batch_size']
+        # test_loaders = self.data_loader.create_data_loaders(
+        #     batch_size=self.config['batch_size'],
+        #     split='test'
         # )
+        # test_loader = test_loaders['test']
+        test_loader = self.data_loader.create_test_loader(
+            batch_size=self.config['batch_size']
+        )
         
         predictions = []
         targets = []
@@ -75,11 +75,11 @@ class Evaluator:
                 batch_predictions = output.cpu().numpy()
                 batch_targets = target.numpy()
                 
-                # 检查每个批次的预测值范围
-                if batch_idx % 10 == 0:  # 每10个批次打印一次
-                    print(f"\nBatch {batch_idx}:")
-                    print(f"预测值范围: [{batch_predictions.min():.2f}, {batch_predictions.max():.2f}]")
-                    print(f"实际值范围: [{batch_targets.min():.2f}, {batch_targets.max():.2f}]")
+                # # 检查每个批次的预测值范围
+                # if batch_idx % 10 == 0:  # 每10个批次打印一次
+                #     print(f"\nBatch {batch_idx}:")
+                #     print(f"预测值范围: [{batch_predictions.min():.2f}, {batch_predictions.max():.2f}]")
+                #     print(f"实际值范围: [{batch_targets.min():.2f}, {batch_targets.max():.2f}]")
                 
                 predictions.extend(batch_predictions)
                 targets.extend(batch_targets)
@@ -102,17 +102,17 @@ class Evaluator:
         print(f"预测值范围: [{predictions.min():.2f}, {predictions.max():.2f}]")
         print(f"实际值范围: [{targets.min():.2f}, {targets.max():.2f}]")
         
-        # 添加异常值检测
-        mean_pred = np.mean(predictions)
-        std_pred = np.std(predictions)
-        abnormal_mask = np.abs(predictions - mean_pred) > 3 * std_pred
-        if np.any(abnormal_mask):
-            print("\n=== 检测到异常预测值 ===")
-            abnormal_indices = np.where(abnormal_mask)[0]
-            for idx in abnormal_indices[:10]:  # 只显示前10个异常值
-                print(f"位置 {idx}:")
-                print(f"预测值: {predictions[idx]:.2f}")
-                print(f"实际值: {targets[idx]:.2f}")
+        # # 添加异常值检测
+        # mean_pred = np.mean(predictions)
+        # std_pred = np.std(predictions)
+        # abnormal_mask = np.abs(predictions - mean_pred) > 3 * std_pred
+        # if np.any(abnormal_mask):
+        #     print("\n=== 检测到异常预测值 ===")
+        #     abnormal_indices = np.where(abnormal_mask)[0]
+        #     for idx in abnormal_indices[:1000]:  # 只显示前10个异常值
+        #         print(f"位置 {idx}:")
+        #         print(f"预测值: {predictions[idx].item():.2f}")  # 使用.item()获取标量值
+        #         print(f"实际值: {targets[idx].item():.2f}")      # 使用.item()获取标量值
         
         # 计算评估指标
         metrics = self._calculate_metrics(predictions, targets)
@@ -130,8 +130,10 @@ class Evaluator:
         mae = mean_absolute_error(targets, predictions)
         r2 = r2_score(targets, predictions)
         
-        # 计算SMAPE
-        smape = np.mean(2.0 * np.abs(predictions - targets) / (np.abs(predictions) + np.abs(targets))) * 100
+        # 计算SMAPE，添加epsilon避免除零
+        epsilon = 1e-10  # 添加一个很小的值
+        smape = np.mean(2.0 * np.abs(predictions - targets) / 
+                       (np.abs(predictions) + np.abs(targets) + epsilon)) * 100
         
         # 计算不同误差范围内的准确率
         errors = np.abs(predictions - targets)
@@ -165,11 +167,11 @@ class Evaluator:
         """Generate visualization charts"""
         os.makedirs(save_dir, exist_ok=True)
         
-        # 1. Time series comparison plot (first 1000 points for readability)
+        # 1. Time series comparison plot
         plt.figure(figsize=(15, 6))
-        plt.plot(targets[:1000], label='Actual', alpha=0.7)
-        plt.plot(predictions[:1000], label='Predicted', alpha=0.7)
-        plt.title('Computing Node Prediction Time Series (First 1000 Points)')
+        plt.plot(targets, label='Actual', alpha=0.7)
+        plt.plot(predictions, label='Predicted', alpha=0.7)
+        plt.title('Computing Node Prediction Time Series')
         plt.xlabel('Time Step')
         plt.ylabel('Number of Computing Nodes')
         plt.legend()
@@ -177,9 +179,9 @@ class Evaluator:
         plt.savefig(os.path.join(save_dir, 'time_series.png'))
         plt.close()
         
-        # 2. Scatter plot of predictions vs actual values
+        # 2. Scatter plot: predictions vs actual values
         plt.figure(figsize=(10, 10))
-        plt.scatter(targets, predictions, alpha=0.5, s=1)
+        plt.scatter(targets, predictions, c='blue', alpha=0.5, s=1, label='Prediction Points')
         min_val = min(targets.min(), predictions.min())
         max_val = max(targets.max(), predictions.max())
         plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal Prediction')
@@ -194,10 +196,12 @@ class Evaluator:
         # 3. Error distribution histogram
         plt.figure(figsize=(10, 6))
         errors = predictions - targets
-        plt.hist(errors, bins=50, alpha=0.7)
+        plt.hist(errors, bins=50, color='skyblue', alpha=0.7, label='Error Distribution')
+        plt.axvline(x=0, color='r', linestyle='--', label='Zero Error Line')
         plt.title('Prediction Error Distribution')
-        plt.xlabel('Error')
+        plt.xlabel('Prediction Error (Predicted - Actual)')
         plt.ylabel('Frequency')
+        plt.legend()
         plt.grid(True)
         plt.savefig(os.path.join(save_dir, 'error_distribution.png'))
         plt.close()
