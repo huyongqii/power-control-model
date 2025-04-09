@@ -11,7 +11,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # 模型配置
 MODEL_CONFIG = {
     'epochs': 100,
-    'batch_size': 128,
+    'batch_size': 256,
     'learning_rate': 0.001,
     'min_lr': 1e-6,
     'lr_patience': 5,
@@ -26,7 +26,7 @@ MODEL_CONFIG = {
     # 'data_dir': "/home/hyq/green-energy/sk1",
     # 'data_path': os.path.join(DATA_DIR, 'training_data_20250120_190101.csv'),
     # 'data_path': "/home/hyq/green-energy/sk1/combined_job_timeline.csv",
-    'total_nodes': 150,
+    'total_nodes': 250,
     'data_path': "/home/hyq/green-energy/wm2/job_timeline_2024.csv",
     'log_dir': LOG_DIR,
     'grad_clip': 1.0,

@@ -147,8 +147,6 @@ class Trainer:
                 print(f"\r进度: [{'=' * progress}{' ' * (50-progress)}] {batch_idx}/{batch_count} "
                       f"- 当前 loss: {loss_components['total_loss']:.6f}", end="")
             
-            train_loss /= len(data_loaders['train'])
-            
             # 验证阶段
             val_loss = self._validate(data_loaders['val'], self.criterion)
             

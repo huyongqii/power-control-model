@@ -36,7 +36,7 @@ class DataProcessor:
             # 'active_node_ratio',  # 改为使用比例
             'active_node_count',
             # 'utilization_rate',
-            'avg_req_cpu_occupancy_rate',
+            'avg_req_cpu_rate',
             'avg_req_node_per_job',
             'avg_req_cpu_per_job',
             'avg_runtime_minutes'
@@ -147,10 +147,8 @@ class DataProcessor:
         timestamps = pd.to_datetime(df['datetime'])
         
         for i in range(len(df) - lookback - forecast_horizon + 1):
-            # 1. 提取历史序列数据（现在使用的是节点占比）
             past_hour_data = df[self.pst_hour_feature_names].iloc[i:(i + lookback)].values
             
-            # 2. 获取目标时间点（目标值也是节点占比）
             target_start = i + lookback
             target_end = target_start + forecast_horizon
             target_value = df['active_node_count'].iloc[target_end-1]
@@ -381,7 +379,7 @@ class DataProcessor:
         )
         
         data_dict['y_test'] = self.target_scaler.transform(
-            data_dict['y_test']
+            data_dict['y_test'].reshape(-1, 1)
         )
         
         # 保存处理好的数据集
