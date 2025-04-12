@@ -22,10 +22,8 @@ class DataProcessor:
             feature_range=(0, 1)  # 改为0-1范围，因为是百分比
         )
         
-        self.dayback_scaler = RobustScaler(
-            with_centering=True,
-            with_scaling=True,
-            quantile_range=(5.0, 95.0)
+        self.dayback_scaler = MinMaxScaler(
+            feature_range=(0, 1)  # 因为输入已经是 0-1 的比例值
         )
         
         self.cn_holidays = holidays.CN()
@@ -133,9 +131,10 @@ class DataProcessor:
         # df = self._handle_outliers(df)
         
         # 3. 将active_node_count转换为占比
-        # total_nodes = self.config['total_nodes']
         # df['active_node_ratio'] = df['active_node_count'] / total_nodes
         
+        total_nodes = self.config['total_nodes']
+        df['active_node_count'] = df['active_node_count'] / total_nodes
         lookback = self.config['lookback_minutes']
         forecast_horizon = self.config['forecast_minutes']
         
@@ -215,17 +214,16 @@ class DataProcessor:
     def _get_dayback_features(self, df, current_idx, target_col):
         """获取历史模式特征"""
         pattern_features = []
-        total_nodes = self.config['total_nodes']  # 需要在配置中添加总节点数
         
         for days_back in [1, 3, 5, 7]:
             minutes_back = days_back * 24 * 60
             historical_center_idx = current_idx - minutes_back
             
             if 0 <= historical_center_idx < len(df):
-                # 将历史节点数也转换为占比
-                pattern_features.append(float(df[target_col].iloc[historical_center_idx]) / total_nodes)
+                # 直接使用，因为已经是比例了
+                pattern_features.append(float(df[target_col].iloc[historical_center_idx]))
             else:
-                current_value = float(df[target_col].iloc[current_idx]) / total_nodes
+                current_value = float(df[target_col].iloc[current_idx])
                 pattern_features.append(current_value)
         
         return np.array(pattern_features, dtype=np.float32)

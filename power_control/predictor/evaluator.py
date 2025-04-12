@@ -94,8 +94,8 @@ class Evaluator:
         print(f"实际值范围: [{targets.min():.2f}, {targets.max():.2f}]")
         
         # 反向转换缩放
-        predictions = self.data_loader.inverse_transform_y(predictions)
-        targets = self.data_loader.inverse_transform_y(targets)
+        predictions = self.data_loader.inverse_transform_y(predictions) * self.config['total_nodes']
+        targets = self.data_loader.inverse_transform_y(targets) * self.config['total_nodes']
         
         # 检查反向转换后的数值范围
         print("\n=== 缩放转换后的数值范围 ===")
