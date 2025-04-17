@@ -10,20 +10,18 @@ class DataProcessor:
     def __init__(self):
         self.config = MODEL_CONFIG
         
-        # 1. 修改scaler的配置
         self.feature_scaler = RobustScaler(
             with_centering=True,
             with_scaling=True,
             quantile_range=(5.0, 95.0)  # 使用更宽的四分位范围
         )
         
-        # 2. 修改目标值的scaler
         self.target_scaler = MinMaxScaler(
-            feature_range=(0, 1)  # 改为0-1范围，因为是百分比
+            feature_range=(0, 1)  
         )
         
         self.dayback_scaler = MinMaxScaler(
-            feature_range=(0, 1)  # 因为输入已经是 0-1 的比例值
+            feature_range=(0, 1) 
         )
         
         self.cn_holidays = holidays.CN()
@@ -31,7 +29,6 @@ class DataProcessor:
         self.pst_hour_feature_names = [
             'running_job_count',
             # 'waiting_job_count',
-            # 'active_node_ratio',  # 改为使用比例
             'active_node_count',
             # 'utilization_rate',
             'avg_req_cpu_rate',
@@ -47,25 +44,19 @@ class DataProcessor:
         os.makedirs(self.dataset_dir, exist_ok=True)
 
     def process_and_save_data(self):
-        """处理数据并保存"""
         print("开始处理数据...")
         
-        # 加载原始数据
         data = pd.read_csv(self.config['data_path'])
         data = data.sort_values('datetime').reset_index(drop=True)
         
-        # 准备时间序列数据
         past_hour_features, cur_datetime_features, dayback_features, target_values = \
             self.prepare_time_series_data(data)
         
-        # 确保目标值非负
         target_values = np.maximum(target_values, 0)
         
-        # 划分数据集
         train_size = int(len(target_values) * 0.7)
         val_size = int(len(target_values) * 0.15)
         
-        # 创建数据字典
         data_dict = {
             'X_train': [
                 past_hour_features[:train_size],
@@ -89,7 +80,6 @@ class DataProcessor:
             'y_test': target_values[train_size + val_size:]
         }
         
-        # 特征缩放
         for split in ['train', 'val', 'test']:
             if split == 'train':
                 # 在训练集上拟合并转换
@@ -118,12 +108,10 @@ class DataProcessor:
                     data_dict[f'y_{split}'].reshape(-1, 1)
                 )
         
-        # 保存处理好的数据集
         self.save_processed_data(data_dict)
         print("数据处理完成并已保存")
 
     def prepare_time_series_data(self, df):
-        """准备时间序列数据"""
         # 1. 添加数据验证
         # self._validate_input_data(df)
         
@@ -174,7 +162,6 @@ class DataProcessor:
                 np.array(target_values).reshape(-1, 1))
 
     def _create_time_features(self, start_time, end_time):
-        """创建时间范围的特征向量"""
         is_weekend = float(start_time.dayofweek >= 5)
         is_holiday = float(self.is_holiday(start_time.date()))
         
@@ -208,11 +195,9 @@ class DataProcessor:
             return 5  # 深夜
 
     def is_holiday(self, date):
-        """判断是否为节假日"""
         return date in self.cn_holidays
 
     def _get_dayback_features(self, df, current_idx, target_col):
-        """获取历史模式特征"""
         pattern_features = []
         
         for days_back in [1, 3, 5, 7]:
@@ -220,7 +205,6 @@ class DataProcessor:
             historical_center_idx = current_idx - minutes_back
             
             if 0 <= historical_center_idx < len(df):
-                # 直接使用，因为已经是比例了
                 pattern_features.append(float(df[target_col].iloc[historical_center_idx]))
             else:
                 current_value = float(df[target_col].iloc[current_idx])
@@ -229,14 +213,11 @@ class DataProcessor:
         return np.array(pattern_features, dtype=np.float32)
 
     def _validate_input_data(self, df):
-        """验证输入数据的完整性和有效性"""
-        # 检查必要的列是否存在
         required_columns = self.pst_hour_feature_names + ['datetime']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"缺少必要的列: {missing_columns}")
         
-        # 检查时间戳的连续性并输出不连续点
         timestamps = pd.to_datetime(df['datetime'])
         time_diff = timestamps.diff()
         expected_diff = pd.Timedelta(minutes=1)
@@ -301,9 +282,7 @@ class DataProcessor:
         return df_clean
 
     def save_processed_data(self, data_dict: dict, prefix: str = 'dataset'):
-        """保存处理好的数据集和缩放器"""
         try:
-            # 保存数据集
             for key, data in data_dict.items():
                 if isinstance(data, list):
                     for i, feature_data in enumerate(data):
@@ -315,7 +294,6 @@ class DataProcessor:
                     filepath = os.path.join(self.dataset_dir, filename)
                     np.save(filepath, data)
             
-            # 保存缩放器
             scalers = {
                 'feature_scaler': self.feature_scaler,
                 'target_scaler': self.target_scaler,
@@ -330,9 +308,6 @@ class DataProcessor:
             raise RuntimeError(f"保存数据集时出错: {str(e)}")
 
     def process_and_save_as_test_data(self):
-        """处理数据并将整个数据集保存为测试集"""
-        print("开始处理数据为测试集...")
-        
         try:
             scaler_path = self.config['scaler_path']
             if not os.path.exists(scaler_path):
@@ -346,18 +321,14 @@ class DataProcessor:
         except Exception as e:
             raise RuntimeError(f"加载数据缩放器时出错: {str(e)}")
         
-        # 加载原始数据
         data = pd.read_csv(self.config['data_path'])
         data = data.sort_values('datetime').reset_index(drop=True)
         
-        # 准备时间序列数据
         past_hour_features, cur_datetime_features, dayback_features, target_values = \
             self.prepare_time_series_data(data)
         
-        # 确保目标值非负
         target_values = np.maximum(target_values, 0)
         
-        # 创建数据字典
         data_dict = {
             'X_test': [
                 past_hour_features,
@@ -367,7 +338,6 @@ class DataProcessor:
             'y_test': target_values
         }
         
-        # 特征缩放 (使用已有的scaler进行transform)
         data_dict['X_test'][0] = self.feature_scaler.transform(
             data_dict['X_test'][0].reshape(-1, self.feature_size)
         ).reshape(data_dict['X_test'][0].shape)
@@ -380,14 +350,11 @@ class DataProcessor:
             data_dict['y_test'].reshape(-1, 1)
         )
         
-        # 保存处理好的数据集
         self.save_test_data(data_dict)
         print("测试数据处理完成并已保存")
 
     def save_test_data(self, data_dict: dict, prefix: str = 'dataset'):
-        """保存处理好的测试数据集"""
         try:
-            # 保存测试集数据
             for i, feature_data in enumerate(data_dict['X_test']):
                 filename = f"{prefix}_X_test_part{i}.npy"
                 filepath = os.path.join(self.dataset_dir, filename)
@@ -397,7 +364,6 @@ class DataProcessor:
             filepath = os.path.join(self.dataset_dir, filename)
             np.save(filepath, data_dict['y_test'])
             
-            # 保存缩放器
             scalers = {
                 'feature_scaler': self.feature_scaler,
                 'target_scaler': self.target_scaler,
@@ -412,7 +378,6 @@ class DataProcessor:
             raise RuntimeError(f"保存测试数据集时出错: {str(e)}")
 
 def main():
-    """主函数用于数据处理"""
     processor = DataProcessor()
     
     import argparse

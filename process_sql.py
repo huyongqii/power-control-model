@@ -48,7 +48,6 @@ def get_job_minutes(start, end):
     return minutes
 
 def write_to_csv(year, timeline):
-    """将统计结果按年写入CSV文件"""
     output_filename = f'wm2/job_timeline_{year}.csv'
     with open(output_filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
@@ -75,14 +74,10 @@ def write_to_csv(year, timeline):
                 else:
                     avg_req_cpu_occupancy_rate = 0.0
                 
-                # 计算平均每个作业使用的节点数
-                # 如果没有运行的作业，则平均值为0
                 avg_nodes_per_job = (stats['total_nodes_per_job'] / running) if running > 0 else 0
                 
-                # 计算平均每个作业的CPU数
                 avg_cpus_per_job = (stats['total_cpu_req'] / running) if running > 0 else 0
                 
-                # 计算平均运行时长（转换为分钟）
                 avg_runtime = (stats['total_runtime'] / running / 60) if running > 0 else 0
                 
                 writer.writerow([
@@ -99,12 +94,10 @@ def write_to_csv(year, timeline):
     print(f"统计结果已写入文件：{output_filename}")
 
 def main():
-    # 读取所有作业记录
     jobs = []
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cursor:
-            # 修改SQL查询，只选择成功完成且有节点信息的作业
             sql = """
             SELECT DISTINCT j.job_db_inx, j.time_submit, j.time_start, j.time_end, 
                    j.node_inx, j.cpus_req 
@@ -130,7 +123,6 @@ def main():
     finally:
         conn.close()
 
-    # 初始化timeline字典
     timeline = defaultdict(lambda: {
         'running': 0,          # 正在运行的作业数量
         'waiting': 0,          # 正在等待的作业数量
@@ -140,7 +132,6 @@ def main():
         'total_runtime': 0,    # 所有运行作业的运行时长总和
     })
     
-    # 处理作业数据
     total_jobs = len(jobs)
     for i, job in enumerate(jobs):
         if i % 10000 == 0:
@@ -153,7 +144,6 @@ def main():
         node_str = job['node_inx']
         cpus_req = job['cpus_req']
 
-        # 处理运行中的作业
         if ts_start and ts_end and ts_end > 0:
             nodes = parse_node_inx(node_str)
             if nodes and cpus_req:
@@ -168,12 +158,10 @@ def main():
                     current_runtime = minute_ts - ts_start
                     timeline[minute_ts]['total_runtime'] += current_runtime
 
-        # 处理等待中的作业
         if ts_submit and ts_start:
             for minute_ts in get_job_minutes(ts_submit, ts_start):
                 timeline[minute_ts]['waiting'] += 1
     
-    # 按年份写入文件
     years = set()
     for minute_ts in timeline.keys():
         years.add(datetime.fromtimestamp(minute_ts).year)

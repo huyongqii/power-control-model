@@ -46,22 +46,18 @@ class Trainer:
         self.data_loader = DataLoader()
         self.model = None
         self.criterion = CustomEnergyLoss()
-        # 添加训练和验证损失的记录
         self.loss_history = {
             'train_loss': [],
             'val_loss': []
         }
 
     def train(self):
-        """训练模型并记录训练过程"""
         print(f"开始在设备 {self.device} 上训练模型")
         
-        # 初始化模型
         self.model = NodePredictorNN(
             feature_size=self.data_loader.feature_size
         ).to(self.device)
         
-        # 创建训练集和验证集的数据加载器
         train_loader = self.data_loader.create_data_loaders(
             batch_size=self.config['batch_size'],
             split='train'
@@ -77,7 +73,6 @@ class Trainer:
             'val': val_loader
         }
         
-        # 使用 AdamW 优化器
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config['learning_rate'],
@@ -106,7 +101,6 @@ class Trainer:
         patience_counter = 0
         
         for epoch in range(1, self.config['epochs'] + 1):
-            # 训练阶段
             self.model.train()
             train_loss = 0
             batch_count = len(data_loaders['train'])
@@ -147,24 +141,20 @@ class Trainer:
                 print(f"\r进度: [{'=' * progress}{' ' * (50-progress)}] {batch_idx}/{batch_count} "
                       f"- 当前 loss: {loss_components['total_loss']:.6f}", end="")
             
-            # 验证阶段
             val_loss = self._validate(data_loaders['val'], self.criterion)
             
-            # 更新学习率
             if epoch <= self.config['warmup_epochs']:
                 warmup_scheduler.step()
             else:
                 main_scheduler.step(val_loss)
             current_lr = optimizer.param_groups[0]['lr']
             
-            # 记录历史
             history = {
                 'train_loss': [train_loss],
                 'val_loss': [val_loss],
                 'learning_rates': [current_lr]
             }
             
-            # 保存最佳模型
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_model_state = self.model.state_dict().copy()
@@ -175,7 +165,6 @@ class Trainer:
             else:
                 patience_counter += 1
             
-            # 打印详细的训练信息
             print(f"\nEpoch {epoch}")
             print(f"Train Loss: {train_loss/batch_count:.6f}")
             print(f"Val Loss: {val_loss:.6f}")
@@ -187,31 +176,26 @@ class Trainer:
                 print("Early stopping triggered")
                 break
             
-            # 在每个epoch结束后记录损失
             epoch_train_loss = train_loss / batch_count
             epoch_val_loss = val_loss
             
             self.loss_history['train_loss'].append(epoch_train_loss)
             self.loss_history['val_loss'].append(epoch_val_loss)
         
-        # 恢复最佳模型
         if best_model_state is not None:
             self.model.load_state_dict(best_model_state)
         
-        # 绘制训练历史
         train_log_dir = self.config['log_dir']
         if not os.path.exists(train_log_dir):
             os.makedirs(train_log_dir)
         # self._plot_training_history(history, train_log_dir)
         
-        # 保存训练历史
         history_path = os.path.join(train_log_dir, 'training_history.json')
         with open(history_path, 'w') as f:
             json.dump(history, f, indent=4)
         
         print("训练完成。训练历史已保存。")
         
-        # 在训练结束后绘制损失曲线
         self._plot_loss_curves()
         
         return history
@@ -232,13 +216,11 @@ class Trainer:
         print(f"模型检查点已保存到: {save_path}")
 
     def _validate(self, data_loader, criterion):
-        """验证模型性能"""
         self.model.eval()
         total_loss = 0
         batch_count = 0
         
         for batch in data_loader:
-            # 将数据移到设备上
             past_hour = batch['past_hour'].to(self.device)
             cur_datetime = batch['cur_datetime'].to(self.device)
             dayback = batch['dayback'].to(self.device)
@@ -254,13 +236,10 @@ class Trainer:
         return total_loss / batch_count if batch_count > 0 else float('inf')
 
     def _plot_training_history(self, history, save_path):
-        """绘制更详细的训练历史"""
         plt.figure(figsize=(15, 10))
         
-        # 创建子图
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
         
-        # 绘制总损失
         ax1.plot(self.loss_history['total_loss'], label='Total Loss')
         ax1.set_title('Total Loss During Training')
         ax1.set_xlabel('Batch')
@@ -268,8 +247,7 @@ class Trainer:
         ax1.legend()
         ax1.grid(True)
         
-        # 绘制损失组件
-        for key in ['base_loss', 'smoothness_loss']:  # 添加新的损失组件
+        for key in ['base_loss', 'smoothness_loss']:  
             ax2.plot(self.loss_history[key], label=key)
         ax2.set_title('Loss Components During Training')
         ax2.set_xlabel('Batch')
@@ -296,17 +274,10 @@ class Trainer:
         print(f"Loss curves saved to: {self.config['model_dir']}/loss_curves.png")
 
 def set_seed(seed: int = 42):
-    """
-    设置随机种子以确保结果可重现
-    
-    参数:
-        seed (int): 随机种子值
-    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # 某些操作的确定性配置
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 

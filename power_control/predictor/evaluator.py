@@ -18,7 +18,6 @@ class Evaluator:
         self.model = None
 
     def load_model(self):
-        """从固定目录加载预训练模型"""
         model_dir = self.config['model_dir']
         if not os.path.exists(model_dir):
             raise FileNotFoundError(f"模型目录未找到: {model_dir}")
@@ -27,18 +26,15 @@ class Evaluator:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"模型文件未找到: {model_path}")
         
-        # 创建新的模型实例
         self.model = NodePredictorNN(
             feature_size=self.data_loader.feature_size
         ).to(self.device)
         
-        # 加载模型，设置 weights_only=True
         checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         print(f"成功从 {model_path} 加载模型")
 
     def evaluate(self) -> tuple:
-        """评估模型并生成可视化结果"""
         print("开始评估模型")
 
         # 1. 加载模型
@@ -87,6 +83,9 @@ class Evaluator:
         # 转换为numpy数组
         predictions = np.array(predictions)
         targets = np.array(targets)
+
+        print("predictions shape: ", predictions.shape)
+        print("targets shape: ", targets.shape)
         
         # 在反向转换缩放之前检查数值范围
         print("\n=== 缩放转换前的数值范围 ===")

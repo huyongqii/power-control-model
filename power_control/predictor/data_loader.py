@@ -34,7 +34,6 @@ class DataLoader:
         self.feature_size = 6
     
     def _load_scalers(self):
-        """加载数据缩放器"""
         scaler_path = os.path.join(self.dataset_dir, "dataset_scalers.pkl")
         scalers = joblib.load(scaler_path)
         self.feature_scaler = scalers['feature_scaler']
@@ -42,21 +41,11 @@ class DataLoader:
         self.dayback_scaler = scalers['dayback_scaler']
     
     def load_data(self, split: str = 'all'):
-        """
-        加载指定的数据集划分
-        
-        参数:
-            split (str): 要加载的数据集划分('train', 'val', 'test', 'all')
-            
-        返回:
-            dict: 包含加载的数据集的字典
-        """
         try:
             data_dict = {}
             splits = [split] if split != 'all' else ['train', 'val', 'test']
             
             for current_split in splits:
-                # 加载特征数据
                 X_key = f'X_{current_split}'
                 X_data = []
                 for i in range(3):
@@ -65,7 +54,6 @@ class DataLoader:
                     X_data.append(np.load(filepath))
                 data_dict[X_key] = X_data
                 
-                # 加载目标值
                 y_key = f'y_{current_split}'
                 filename = f"dataset_{y_key}.npy"
                 filepath = os.path.join(self.dataset_dir, filename)
@@ -78,16 +66,6 @@ class DataLoader:
             raise RuntimeError(f"加载数据集时出错: {str(e)}")
     
     def create_data_loaders(self, batch_size: int, split: str = 'all') -> dict:
-        """
-        创建数据加载器
-        
-        参数:
-            batch_size (int): 批次大小
-            split (str): 要加载的数据集划分
-            
-        返回:
-            dict: 包含数据加载器的字典
-        """
         data_dict = self.load_data(split)
         loaders = {}
         
@@ -127,7 +105,6 @@ class DataLoader:
         return loaders
     
     def inverse_transform_y(self, y_scaled):
-        """将缩放后的目标值转换回原始范围"""
         # 确保输入是2D数组
         if y_scaled.ndim == 1:
             y_scaled = y_scaled.reshape(-1, 1)
@@ -139,12 +116,10 @@ class DataLoader:
         return y_original.reshape(-1)
 
     def load_test_data(self):
-        """加载整个数据集作为测试集"""
         try:
             data_dict = {}
             data_filename = os.path.splitext(os.path.basename(self.config['data_path']))[0]
             
-            # 加载特征数据
             X_data = []
             for i in range(3):
                 filename = f"dataset_X_test_part{i}.npy"
@@ -152,7 +127,6 @@ class DataLoader:
                 X_data.append(np.load(filepath))
             data_dict['X_test'] = X_data
             
-            # 加载目标值
             filename = f"dataset_y_test.npy"
             filepath = os.path.join(self.dataset_dir, filename)
             data_dict['y_test'] = np.load(filepath)

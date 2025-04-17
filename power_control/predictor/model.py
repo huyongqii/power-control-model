@@ -129,7 +129,7 @@ class NodePredictorNN(nn.Module):
             nn.BatchNorm1d(128),
             nn.Dropout(0.2),
             nn.Linear(128, 1),
-            nn.ReLU()  # 确保非负输出
+            nn.ReLU()  
         )
     
     def forward(self, past_hour, cur_datetime, dayback):
