@@ -1,8 +1,8 @@
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MODEL_DIR = os.path.join(BASE_DIR, 'power_control', 'predictor', 'models')
-LOG_DIR = os.path.join(BASE_DIR, 'power_control', 'predictor', 'logs')
+MODEL_DIR = os.path.join(BASE_DIR, 'models')
+LOG_DIR = os.path.join(BASE_DIR, 'train', 'logs')
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
